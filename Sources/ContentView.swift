@@ -34,6 +34,15 @@ struct ContentView: View {
 struct MainTabView: View {
     @State private var selectedTab = 0
 
+    init() {
+        let appearance = UITabBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor.black
+        appearance.shadowColor = UIColor.white.withAlphaComponent(0.1)
+        UITabBar.appearance().standardAppearance = appearance
+        UITabBar.appearance().scrollEdgeAppearance = appearance
+    }
+
     var body: some View {
         TabView(selection: $selectedTab) {
             HomeView {
@@ -109,7 +118,6 @@ struct HomeView: View {
     var body: some View {
         ScrollView(.vertical) {
             VStack(spacing: 22) {
-                // Heading
                 VStack(spacing: 8) {
                     Text("Welcome Back")
                         .font(.system(size: 29, weight: .bold))
@@ -122,7 +130,7 @@ struct HomeView: View {
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 24)
+                .padding(.top, 16)
 
                 // Main DoniMods Card
                 VStack(alignment: .leading, spacing: 18) {
@@ -163,9 +171,7 @@ struct HomeView: View {
                         HStack {
                             Text("Explore Tools")
                                 .font(.system(size: 15, weight: .semibold))
-
                             Spacer()
-
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 14, weight: .semibold))
                         }
@@ -224,6 +230,7 @@ struct HomeView: View {
         }
         .scrollIndicators(.hidden)
         .background(Color.black)
+        .ignoresSafeArea(edges: .top)
     }
 }
 
@@ -383,9 +390,7 @@ struct SettingsView: View {
                             HStack {
                                 Text("Application")
                                     .foregroundStyle(.white)
-
                                 Spacer()
-
                                 Text("DoniMods")
                                     .foregroundStyle(.gray)
                             }
@@ -393,9 +398,7 @@ struct SettingsView: View {
                             HStack {
                                 Text("Version")
                                     .foregroundStyle(.white)
-
                                 Spacer()
-
                                 Text("1.0.0")
                                     .foregroundStyle(.gray)
                             }
