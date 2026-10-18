@@ -1,4 +1,3 @@
-
 import SwiftUI
 
 // MARK: - App Entry
@@ -108,129 +107,122 @@ struct HomeView: View {
     let onExploreTools: () -> Void
 
     var body: some View {
-        GeometryReader { geometry in
-            ScrollView(.vertical) {
-                VStack(spacing: 22) {
-                    // Heading
-                    VStack(spacing: 8) {
-                        Text("Welcome Back")
-                            .font(.system(size: 29, weight: .bold))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
+        ScrollView(.vertical) {
+            VStack(spacing: 22) {
+                // Heading
+                VStack(spacing: 8) {
+                    Text("Welcome Back")
+                        .font(.system(size: 29, weight: .bold))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
 
-                        Text("Everything you need, in one place.")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.gray)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 24)
+                    Text("Everything you need, in one place.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.gray)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 24)
 
-                    // Main DoniMods Card
-                    VStack(alignment: .leading, spacing: 18) {
-                        HStack(spacing: 14) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(Color.white.opacity(0.10))
-                                    .frame(width: 58, height: 58)
-
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 25, weight: .semibold))
-                                    .foregroundStyle(.white)
-                            }
-
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text("DoniMods")
-                                    .font(.system(size: 21, weight: .bold))
-                                    .foregroundStyle(.white)
-
-                                Text("Your personal toolbox")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.gray)
-                            }
-
-                            Spacer(minLength: 0)
-                        }
-
-                        Rectangle()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(height: 1)
-
-                        Text("Explore your tools and discover what's available.")
-                            .font(.system(size: 14))
-                            .foregroundStyle(.white.opacity(0.82))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Button(action: onExploreTools) {
-                            HStack {
-                                Text("Explore Tools")
-                                    .font(.system(size: 15, weight: .semibold))
-
-                                Spacer()
-
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 14, weight: .semibold))
-                            }
-                            .foregroundStyle(Color.black)
-                            .padding(.horizontal, 18)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                            .background(Color.white)
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .contentShape(RoundedRectangle(cornerRadius: 12))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(20)
-                    .frame(maxWidth: 440)
-                    .background(Color.white.opacity(0.055))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-
-                    // More Features Card
+                // Main DoniMods Card
+                VStack(alignment: .leading, spacing: 18) {
                     HStack(spacing: 14) {
-                        Image(systemName: "clock")
-                            .font(.system(size: 20))
-                            .foregroundStyle(.white)
-                            .frame(width: 46, height: 46)
-                            .background(Color.white.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(Color.white.opacity(0.10))
+                                .frame(width: 58, height: 58)
+
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 25, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
 
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("More Features")
-                                .font(.system(size: 15, weight: .semibold))
+                            Text("DoniMods")
+                                .font(.system(size: 21, weight: .bold))
                                 .foregroundStyle(.white)
 
-                            Text("More features are coming soon.")
-                                .font(.system(size: 12))
+                            Text("Your personal toolbox")
+                                .font(.system(size: 13))
                                 .foregroundStyle(.gray)
                         }
 
                         Spacer(minLength: 0)
                     }
-                    .padding(16)
-                    .frame(maxWidth: 440)
-                    .background(Color.white.opacity(0.035))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                    // Additional bottom space for comfortable scrolling
-                    Color.clear
-                        .frame(height: 18)
+                    Rectangle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(height: 1)
+
+                    Text("Explore your tools and discover what's available.")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white.opacity(0.82))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button(action: onExploreTools) {
+                        HStack {
+                            Text("Explore Tools")
+                                .font(.system(size: 15, weight: .semibold))
+
+                            Spacer()
+
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundStyle(Color.black)
+                        .padding(.horizontal, 18)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .contentShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .frame(maxWidth: .infinity)
-                .frame(minHeight: geometry.size.height, alignment: .top)
-                .padding(.horizontal, 22)
+                .padding(20)
+                .frame(maxWidth: 440)
+                .background(Color.white.opacity(0.055))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+
+                // More Features Card
+                HStack(spacing: 14) {
+                    Image(systemName: "clock")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.white)
+                        .frame(width: 46, height: 46)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("More Features")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+
+                        Text("More features are coming soon.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.gray)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .padding(16)
+                .frame(maxWidth: 440)
+                .background(Color.white.opacity(0.035))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16))
             }
-            .scrollIndicators(.hidden)
-            .background(Color.black)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 22)
+            .padding(.bottom, 22)
         }
+        .scrollIndicators(.hidden)
         .background(Color.black)
     }
 }
