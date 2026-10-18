@@ -65,7 +65,6 @@ enum AuthError: LocalizedError {
 
 protocol AuthService {
     func login(identifier: String, password: String) async throws -> AuthUser
-    func register(username: String, email: String, password: String) async throws -> AuthUser
 }
 
 /// Service giả: chấp nhận mọi thông tin hợp lệ, KHÔNG gửi gì lên server.
@@ -81,10 +80,7 @@ struct MockAuthService: AuthService {
         return AuthUser(username: id, email: "")
     }
 
-    func register(username: String, email: String, password: String) async throws -> AuthUser {
-        try await Task.sleep(nanoseconds: 800_000_000)
-        return AuthUser(username: username, email: email)
-    }
+
 }
 
 // MARK: - Session Manager
@@ -111,16 +107,6 @@ final class SessionManager: ObservableObject {
         setUser(user)
     }
 
-    func register(username: String, email: String, password: String) async throws {
-        isLoading = true
-        defer { isLoading = false }
-        let user = try await service.register(username: username, email: email, password: password)
-        setUser(user)
-    }
-
-    func continueAsGuest() {
-        setUser(AuthUser(username: "Guest", email: "", isGuest: true))
-    }
 
     func logout() {
         user = nil
@@ -211,25 +197,14 @@ struct SplashView: View {
 // MARK: - Auth Screen
 
 enum AuthField: Hashable {
-    case username, email, password, confirm
+    case username, password
 }
 
 struct AuthView: View {
     @EnvironmentObject private var session: SessionManager
 
-    private enum Mode {
-        case login, register
-
-        var title: String {
-            self == .login ? "Login" : "Register"
-        }
-    }
-
-    @State private var mode: Mode = .login
     @State private var username = ""
-    @State private var email = ""
     @State private var password = ""
-    @State private var confirm = ""
     @State private var errorMessage: String?
     @State private var showForgotAlert = false
     @FocusState private var focus: AuthField?
@@ -241,7 +216,6 @@ struct AuthView: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 22) {
                     header
-                    modePicker
                     formCard
 
                     if let message = errorMessage {
@@ -249,7 +223,6 @@ struct AuthView: View {
                     }
 
                     primaryButton
-                    guestButton
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 40)
@@ -264,30 +237,23 @@ struct AuthView: View {
         }
     }
 
-    // MARK: Header
-
     private var header: some View {
         VStack(spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [.cyan.opacity(0.3), .blue.opacity(0.1)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                    .fill(LinearGradient(
+                        colors: [.cyan.opacity(0.3), .blue.opacity(0.1)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
                     .frame(width: 84, height: 84)
 
                 Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [.cyan, .blue],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 2
-                    )
+                    .stroke(LinearGradient(
+                        colors: [.cyan, .blue],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ), lineWidth: 2)
                     .frame(width: 84, height: 84)
                     .shadow(color: .cyan.opacity(0.5), radius: 10)
 
@@ -299,91 +265,32 @@ struct AuthView: View {
 
             Text("DoniMods")
                 .font(.system(size: 32, weight: .black, design: .rounded))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.cyan, .blue],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
+                .foregroundStyle(LinearGradient(
+                    colors: [.cyan, .blue],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ))
                 .shadow(color: .cyan.opacity(0.5), radius: 8)
 
-            Text(mode == .login ? "Sign in to continue" : "Create your account")
+            Text("Sign in to continue")
                 .font(.system(size: 14))
                 .foregroundStyle(.gray)
         }
         .padding(.bottom, 4)
     }
 
-    // MARK: Mode Picker
-
-    private var modePicker: some View {
-        HStack(spacing: 0) {
-            modeButton(.login)
-            modeButton(.register)
-        }
-        .padding(4)
-        .background(Color.white.opacity(0.05))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.white.opacity(0.09), lineWidth: 1)
-        }
-    }
-
-    private func modeButton(_ target: Mode) -> some View {
-        Button {
-            switchMode(target)
-        } label: {
-            Text(target.title)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(mode == target ? Color.black : Color.gray)
-                .frame(maxWidth: .infinity)
-                .frame(height: 38)
-                .background {
-                    if mode == target {
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(
-                                LinearGradient(
-                                    colors: [.cyan, .blue],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                    }
-                }
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: Form
-
     private var formCard: some View {
         VStack(spacing: 12) {
             NeonField(
                 icon: "person.fill",
-                placeholder: mode == .login ? "Username or email" : "Username",
+                placeholder: "Username or email",
                 text: $username,
                 field: .username,
                 focus: $focus,
                 contentType: .username,
                 submitLabel: .next,
-                onSubmit: { focus = (mode == .register) ? .email : .password }
+                onSubmit: { focus = .password }
             )
-
-            if mode == .register {
-                NeonField(
-                    icon: "envelope.fill",
-                    placeholder: "Email",
-                    text: $email,
-                    field: .email,
-                    focus: $focus,
-                    keyboard: .emailAddress,
-                    contentType: .emailAddress,
-                    submitLabel: .next,
-                    onSubmit: { focus = .password }
-                )
-            }
 
             NeonField(
                 icon: "lock.fill",
@@ -392,42 +299,20 @@ struct AuthView: View {
                 field: .password,
                 focus: $focus,
                 isSecure: true,
-                contentType: mode == .login ? UITextContentType.password : UITextContentType.newPassword,
-                submitLabel: mode == .login ? SubmitLabel.go : SubmitLabel.next,
-                onSubmit: {
-                    if mode == .login {
-                        submit()
-                    } else {
-                        focus = .confirm
-                    }
-                }
+                contentType: .password,
+                submitLabel: .go,
+                onSubmit: { submit() }
             )
 
-            if mode == .register {
-                NeonField(
-                    icon: "lock.rotation",
-                    placeholder: "Confirm password",
-                    text: $confirm,
-                    field: .confirm,
-                    focus: $focus,
-                    isSecure: true,
-                    contentType: .newPassword,
-                    submitLabel: .go,
-                    onSubmit: { submit() }
-                )
-            }
-
-            if mode == .login {
-                HStack {
-                    Spacer()
-                    Button("Forgot password?") {
-                        showForgotAlert = true
-                    }
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.cyan.opacity(0.85))
+            HStack {
+                Spacer()
+                Button("Forgot password?") {
+                    showForgotAlert = true
                 }
-                .padding(.top, 2)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.cyan.opacity(0.85))
             }
+            .padding(.top, 2)
         }
         .padding(16)
         .background(Color.white.opacity(0.04))
@@ -460,17 +345,14 @@ struct AuthView: View {
         }
     }
 
-    // MARK: Buttons
-
     private var primaryButton: some View {
         Button(action: submit) {
             ZStack {
                 if session.isLoading {
-                    ProgressView()
-                        .tint(.black)
+                    ProgressView().tint(.black)
                 } else {
                     HStack(spacing: 8) {
-                        Text(mode == .login ? "Login" : "Create Account")
+                        Text("Login")
                             .font(.system(size: 15, weight: .bold))
                         Image(systemName: "arrow.right")
                             .font(.system(size: 13, weight: .bold))
@@ -480,13 +362,11 @@ struct AuthView: View {
             .foregroundStyle(.black)
             .frame(maxWidth: .infinity)
             .frame(height: 50)
-            .background(
-                LinearGradient(
-                    colors: [.cyan, .blue],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-            )
+            .background(LinearGradient(
+                colors: [.cyan, .blue],
+                startPoint: .leading,
+                endPoint: .trailing
+            ))
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .shadow(color: .cyan.opacity(0.35), radius: 10, y: 4)
         }
@@ -494,92 +374,24 @@ struct AuthView: View {
         .disabled(session.isLoading)
     }
 
-    private var guestButton: some View {
-        Button {
-            focus = nil
-            session.continueAsGuest()
-        } label: {
-            Text("Continue as Guest")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
-                .frame(maxWidth: .infinity)
-                .frame(height: 46)
-                .background(Color.white.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
-                }
-        }
-        .buttonStyle(.plain)
-        .disabled(session.isLoading)
-    }
-
-    // MARK: Actions
-
-    private func switchMode(_ target: Mode) {
-        focus = nil
-        withAnimation(.easeInOut(duration: 0.2)) {
-            mode = target
-            errorMessage = nil
-            confirm = ""
-        }
-    }
-
     private func submit() {
         guard !session.isLoading else { return }
-
         focus = nil
-        errorMessage = validate()
-        guard errorMessage == nil else { return }
 
         let name = username.trimmingCharacters(in: .whitespaces)
-        let mail = email.trimmingCharacters(in: .whitespaces)
-        let pass = password
-        let currentMode = mode
+        guard !name.isEmpty, !password.isEmpty else {
+            errorMessage = "Please enter your username and password."
+            return
+        }
+        errorMessage = nil
 
         Task { @MainActor in
             do {
-                switch currentMode {
-                case .login:
-                    try await session.login(identifier: name, password: pass)
-                case .register:
-                    try await session.register(username: name, email: mail, password: pass)
-                }
+                try await session.login(identifier: name, password: password)
             } catch {
                 errorMessage = error.localizedDescription
             }
         }
-    }
-
-    private func validate() -> String? {
-        let name = username.trimmingCharacters(in: .whitespaces)
-
-        switch mode {
-        case .login:
-            if name.isEmpty || password.isEmpty {
-                return "Please enter your username and password."
-            }
-        case .register:
-            if name.count < 3 {
-                return "Username must be at least 3 characters."
-            }
-            if !isValidEmail(email) {
-                return "Please enter a valid email address."
-            }
-            if password.count < 6 {
-                return "Password must be at least 6 characters."
-            }
-            if password != confirm {
-                return "Passwords do not match."
-            }
-        }
-        return nil
-    }
-
-    private func isValidEmail(_ value: String) -> Bool {
-        let parts = value.trimmingCharacters(in: .whitespaces).split(separator: "@")
-        return parts.count == 2 && !parts[0].isEmpty && parts[1].contains(".")
     }
 }
 
@@ -1024,14 +836,11 @@ struct ProfileView: View {
 
     private let stats = [("Mods Used", "0"), ("Sessions", "0"), ("Rank", "—")]
 
-    private var isGuest: Bool { session.user?.isGuest ?? true }
-
     private var displayName: String {
-        isGuest ? "Guest Player" : (session.user?.username ?? "Player")
+        session.user?.username ?? "Player"
     }
 
     private var subtitle: String {
-        if isGuest { return "Login to save your progress" }
         if let mail = session.user?.email, !mail.isEmpty { return mail }
         return "Signed in"
     }
@@ -1110,50 +919,25 @@ struct ProfileView: View {
                             .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
                     }
 
-                    if isGuest {
-                        Button {
-                            session.logout()
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "person.badge.plus")
-                                Text("Login / Register")
-                                    .font(.system(size: 15, weight: .bold))
-                            }
-                            .foregroundStyle(.black)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                            .background(
-                                LinearGradient(
-                                    colors: [.cyan, .blue],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .shadow(color: .cyan.opacity(0.3), radius: 8, y: 4)
+                    Button {
+                        showLogoutConfirm = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                            Text("Log out")
+                                .font(.system(size: 15, weight: .bold))
                         }
-                        .buttonStyle(.plain)
-                    } else {
-                        Button {
-                            showLogoutConfirm = true
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: "rectangle.portrait.and.arrow.right")
-                                Text("Log out")
-                                    .font(.system(size: 15, weight: .bold))
-                            }
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 48)
-                            .background(Color.red.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(Color.red.opacity(0.35), lineWidth: 1)
-                            }
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(Color.red.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(Color.red.opacity(0.35), lineWidth: 1)
                         }
-                        .buttonStyle(.plain)
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
