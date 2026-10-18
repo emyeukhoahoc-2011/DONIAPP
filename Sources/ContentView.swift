@@ -130,7 +130,7 @@ struct HomeView: View {
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 60)
+                .padding(.top, 0)
 
                 // Main DoniMods Card
                 VStack(alignment: .leading, spacing: 18) {
@@ -226,7 +226,7 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 22)
-            .padding(.bottom, 40)
+            .padding(.bottom, 8)
         }
         .scrollIndicators(.hidden)
         .background(Color.black)
