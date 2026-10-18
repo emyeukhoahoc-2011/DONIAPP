@@ -1,13 +1,14 @@
 
 import SwiftUI
 
+// MARK: - App Entry
+
 struct ContentView: View {
     @State private var showSplash = true
 
     var body: some View {
         ZStack {
-            Color.black
-                .ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
             if showSplash {
                 SplashView()
@@ -21,7 +22,7 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                withAnimation(.easeInOut(duration: 0.4)) {
+                withAnimation(.easeInOut(duration: 0.35)) {
                     showSplash = false
                 }
             }
@@ -29,34 +30,42 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Main Tab View
+// MARK: - Main Tabs
 
 struct MainTabView: View {
+    @State private var selectedTab = 0
+
     var body: some View {
-        TabView {
-            HomeView()
-                .tabItem {
-                    Image(systemName: "house.fill")
-                    Text("Home")
-                }
+        TabView(selection: $selectedTab) {
+            HomeView {
+                selectedTab = 1
+            }
+            .tabItem {
+                Image(systemName: "house.fill")
+                Text("Home")
+            }
+            .tag(0)
 
             ToolsView()
                 .tabItem {
                     Image(systemName: "hammer.fill")
                     Text("Tools")
                 }
+                .tag(1)
 
             ProfileView()
                 .tabItem {
                     Image(systemName: "person.fill")
                     Text("Profile")
                 }
+                .tag(2)
 
             SettingsView()
                 .tabItem {
                     Image(systemName: "gearshape.fill")
                     Text("Settings")
                 }
+                .tag(3)
         }
         .tint(.white)
     }
@@ -69,14 +78,13 @@ struct SplashView: View {
 
     var body: some View {
         ZStack {
-            Color.black
-                .ignoresSafeArea()
+            Color.black.ignoresSafeArea()
 
             VStack(spacing: 14) {
                 Text("DoniMods")
                     .font(.system(size: 36, weight: .bold, design: .rounded))
                     .foregroundStyle(.white)
-                    .scaleEffect(animate ? 1 : 0.85)
+                    .scaleEffect(animate ? 1 : 0.88)
                     .opacity(animate ? 1 : 0)
 
                 Text("WELCOME")
@@ -97,13 +105,12 @@ struct SplashView: View {
 // MARK: - Home
 
 struct HomeView: View {
+    let onExploreTools: () -> Void
+
     var body: some View {
         GeometryReader { geometry in
             ScrollView(.vertical) {
-                VStack(spacing: 24) {
-                    // Flexible space above the content
-                    Spacer(minLength: 20)
-
+                VStack(spacing: 22) {
                     // Heading
                     VStack(spacing: 8) {
                         Text("Welcome Back")
@@ -117,8 +124,9 @@ struct HomeView: View {
                             .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
+                    .padding(.top, 24)
 
-                    // Main card
+                    // Main DoniMods Card
                     VStack(alignment: .leading, spacing: 18) {
                         HStack(spacing: 14) {
                             ZStack {
@@ -150,10 +158,10 @@ struct HomeView: View {
 
                         Text("Explore your tools and discover what's available.")
                             .font(.system(size: 14))
-                            .foregroundStyle(.white.opacity(0.8))
+                            .foregroundStyle(.white.opacity(0.82))
                             .fixedSize(horizontal: false, vertical: true)
 
-                        NavigationLink(destination: ToolsView()) {
+                        Button(action: onExploreTools) {
                             HStack {
                                 Text("Explore Tools")
                                     .font(.system(size: 15, weight: .semibold))
@@ -163,11 +171,13 @@ struct HomeView: View {
                                 Image(systemName: "arrow.right")
                                     .font(.system(size: 14, weight: .semibold))
                             }
-                            .foregroundStyle(.black)
+                            .foregroundStyle(Color.black)
                             .padding(.horizontal, 18)
+                            .frame(maxWidth: .infinity)
                             .frame(height: 48)
                             .background(Color.white)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .contentShape(RoundedRectangle(cornerRadius: 12))
                         }
                         .buttonStyle(.plain)
                     }
@@ -180,12 +190,12 @@ struct HomeView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 20))
 
-                    // Coming soon card
+                    // More Features Card
                     HStack(spacing: 14) {
                         Image(systemName: "clock")
                             .font(.system(size: 20))
                             .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
+                            .frame(width: 46, height: 46)
                             .background(Color.white.opacity(0.08))
                             .clipShape(RoundedRectangle(cornerRadius: 12))
 
@@ -210,11 +220,12 @@ struct HomeView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                    // Flexible space below the content
-                    Spacer(minLength: 20)
+                    // Additional bottom space for comfortable scrolling
+                    Color.clear
+                        .frame(height: 18)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(minHeight: geometry.size.height)
+                .frame(minHeight: geometry.size.height, alignment: .top)
                 .padding(.horizontal, 22)
             }
             .scrollIndicators(.hidden)
@@ -464,6 +475,8 @@ struct PageHeader: View {
         .padding(.bottom, 8)
     }
 }
+
+// MARK: - Preview
 
 #Preview {
     ContentView()
