@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - App Entry
 
 struct ContentView: View {
+    @StateObject private var session = SessionManager()
     @State private var showSplash = true
 
     var body: some View {
@@ -13,11 +14,16 @@ struct ContentView: View {
                 SplashView()
                     .transition(.opacity)
                     .zIndex(1)
-            } else {
+            } else if session.isLoggedIn {
                 MainTabView()
+                    .transition(.opacity)
+            } else {
+                AuthView()
                     .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.35), value: session.isLoggedIn)
+        .environmentObject(session)
         .preferredColorScheme(.dark)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
@@ -26,6 +32,134 @@ struct ContentView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Auth Model
+
+struct AuthUser: Codable, Equatable {
+    var username: String
+    var email: String
+    var isGuest: Bool = false
+}
+
+enum AuthError: LocalizedError {
+    case invalidCredentials
+    case accountExists
+    case network
+    case custom(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidCredentials: return "Wrong username or password."
+        case .accountExists: return "This account already exists."
+        case .network: return "Can't reach the server. Check your connection."
+        case .custom(let message): return message
+        }
+    }
+}
+
+// MARK: - Auth Service
+// Khi có server: tạo struct mới (ví dụ APIAuthService) conform AuthService,
+// rồi đổi MockAuthService() thành APIAuthService() trong SessionManager.init.
+
+protocol AuthService {
+    func login(identifier: String, password: String) async throws -> AuthUser
+    func register(username: String, email: String, password: String) async throws -> AuthUser
+}
+
+/// Service giả: chấp nhận mọi thông tin hợp lệ, KHÔNG gửi gì lên server.
+struct MockAuthService: AuthService {
+    func login(identifier: String, password: String) async throws -> AuthUser {
+        try await Task.sleep(nanoseconds: 800_000_000)
+
+        let id = identifier.trimmingCharacters(in: .whitespaces)
+        if id.contains("@") {
+            let name = String(id.split(separator: "@").first ?? "Player")
+            return AuthUser(username: name, email: id)
+        }
+        return AuthUser(username: id, email: "")
+    }
+
+    func register(username: String, email: String, password: String) async throws -> AuthUser {
+        try await Task.sleep(nanoseconds: 800_000_000)
+        return AuthUser(username: username, email: email)
+    }
+}
+
+// MARK: - Session Manager
+
+@MainActor
+final class SessionManager: ObservableObject {
+    @Published private(set) var user: AuthUser?
+    @Published private(set) var isLoading = false
+
+    private let service: AuthService
+    private static let storageKey = "doni_session_user"
+
+    var isLoggedIn: Bool { user != nil }
+
+    init(service: AuthService = MockAuthService()) {
+        self.service = service
+        self.user = Self.loadStoredUser()
+    }
+
+    func login(identifier: String, password: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        let user = try await service.login(identifier: identifier, password: password)
+        setUser(user)
+    }
+
+    func register(username: String, email: String, password: String) async throws {
+        isLoading = true
+        defer { isLoading = false }
+        let user = try await service.register(username: username, email: email, password: password)
+        setUser(user)
+    }
+
+    func continueAsGuest() {
+        setUser(AuthUser(username: "Guest", email: "", isGuest: true))
+    }
+
+    func logout() {
+        user = nil
+        UserDefaults.standard.removeObject(forKey: Self.storageKey)
+    }
+
+    private func setUser(_ newUser: AuthUser) {
+        user = newUser
+        if let data = try? JSONEncoder().encode(newUser) {
+            UserDefaults.standard.set(data, forKey: Self.storageKey)
+        }
+    }
+
+    private static func loadStoredUser() -> AuthUser? {
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return nil }
+        return try? JSONDecoder().decode(AuthUser.self, from: data)
+    }
+}
+
+// MARK: - Shared Background
+
+struct NeonBackground: View {
+    var glowOffset: CGSize = CGSize(width: 80, height: -120)
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            Circle()
+                .fill(Color.cyan.opacity(0.10))
+                .frame(width: 260, height: 260)
+                .blur(radius: 70)
+                .offset(glowOffset)
+        }
+        .ignoresSafeArea()
     }
 }
 
@@ -71,6 +205,448 @@ struct SplashView: View {
             withAnimation(.spring(duration: 0.8)) { animate = true }
             glowPulse = true
         }
+    }
+}
+
+// MARK: - Auth Screen
+
+enum AuthField: Hashable {
+    case username, email, password, confirm
+}
+
+struct AuthView: View {
+    @EnvironmentObject private var session: SessionManager
+
+    private enum Mode {
+        case login, register
+
+        var title: String {
+            self == .login ? "Login" : "Register"
+        }
+    }
+
+    @State private var mode: Mode = .login
+    @State private var username = ""
+    @State private var email = ""
+    @State private var password = ""
+    @State private var confirm = ""
+    @State private var errorMessage: String?
+    @State private var showForgotAlert = false
+    @FocusState private var focus: AuthField?
+
+    var body: some View {
+        ZStack {
+            NeonBackground(glowOffset: CGSize(width: 0, height: -220))
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 22) {
+                    header
+                    modePicker
+                    formCard
+
+                    if let message = errorMessage {
+                        errorBanner(message)
+                    }
+
+                    primaryButton
+                    guestButton
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 40)
+                .padding(.bottom, 30)
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+        .alert("Reset password", isPresented: $showForgotAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Password reset will be available once the server is connected.")
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [.cyan.opacity(0.3), .blue.opacity(0.1)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 84, height: 84)
+
+                Circle()
+                    .stroke(
+                        LinearGradient(
+                            colors: [.cyan, .blue],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 2
+                    )
+                    .frame(width: 84, height: 84)
+                    .shadow(color: .cyan.opacity(0.5), radius: 10)
+
+                Image(systemName: "gamecontroller.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.cyan)
+                    .shadow(color: .cyan, radius: 8)
+            }
+
+            Text("DoniMods")
+                .font(.system(size: 32, weight: .black, design: .rounded))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [.cyan, .blue],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .shadow(color: .cyan.opacity(0.5), radius: 8)
+
+            Text(mode == .login ? "Sign in to continue" : "Create your account")
+                .font(.system(size: 14))
+                .foregroundStyle(.gray)
+        }
+        .padding(.bottom, 4)
+    }
+
+    // MARK: Mode Picker
+
+    private var modePicker: some View {
+        HStack(spacing: 0) {
+            modeButton(.login)
+            modeButton(.register)
+        }
+        .padding(4)
+        .background(Color.white.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.white.opacity(0.09), lineWidth: 1)
+        }
+    }
+
+    private func modeButton(_ target: Mode) -> some View {
+        Button {
+            switchMode(target)
+        } label: {
+            Text(target.title)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(mode == target ? Color.black : Color.gray)
+                .frame(maxWidth: .infinity)
+                .frame(height: 38)
+                .background {
+                    if mode == target {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(
+                                LinearGradient(
+                                    colors: [.cyan, .blue],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Form
+
+    private var formCard: some View {
+        VStack(spacing: 12) {
+            NeonField(
+                icon: "person.fill",
+                placeholder: mode == .login ? "Username or email" : "Username",
+                text: $username,
+                field: .username,
+                focus: $focus,
+                contentType: .username,
+                submitLabel: .next,
+                onSubmit: { focus = (mode == .register) ? .email : .password }
+            )
+
+            if mode == .register {
+                NeonField(
+                    icon: "envelope.fill",
+                    placeholder: "Email",
+                    text: $email,
+                    field: .email,
+                    focus: $focus,
+                    keyboard: .emailAddress,
+                    contentType: .emailAddress,
+                    submitLabel: .next,
+                    onSubmit: { focus = .password }
+                )
+            }
+
+            NeonField(
+                icon: "lock.fill",
+                placeholder: "Password",
+                text: $password,
+                field: .password,
+                focus: $focus,
+                isSecure: true,
+                contentType: mode == .login ? UITextContentType.password : UITextContentType.newPassword,
+                submitLabel: mode == .login ? SubmitLabel.go : SubmitLabel.next,
+                onSubmit: {
+                    if mode == .login {
+                        submit()
+                    } else {
+                        focus = .confirm
+                    }
+                }
+            )
+
+            if mode == .register {
+                NeonField(
+                    icon: "lock.rotation",
+                    placeholder: "Confirm password",
+                    text: $confirm,
+                    field: .confirm,
+                    focus: $focus,
+                    isSecure: true,
+                    contentType: .newPassword,
+                    submitLabel: .go,
+                    onSubmit: { submit() }
+                )
+            }
+
+            if mode == .login {
+                HStack {
+                    Spacer()
+                    Button("Forgot password?") {
+                        showForgotAlert = true
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.cyan.opacity(0.85))
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 20))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(Color.cyan.opacity(0.18), lineWidth: 1)
+        }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 14))
+                .foregroundStyle(.red)
+
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.9))
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .background(Color.red.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.red.opacity(0.3), lineWidth: 1)
+        }
+    }
+
+    // MARK: Buttons
+
+    private var primaryButton: some View {
+        Button(action: submit) {
+            ZStack {
+                if session.isLoading {
+                    ProgressView()
+                        .tint(.black)
+                } else {
+                    HStack(spacing: 8) {
+                        Text(mode == .login ? "Login" : "Create Account")
+                            .font(.system(size: 15, weight: .bold))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 13, weight: .bold))
+                    }
+                }
+            }
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(
+                LinearGradient(
+                    colors: [.cyan, .blue],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .shadow(color: .cyan.opacity(0.35), radius: 10, y: 4)
+        }
+        .buttonStyle(.plain)
+        .disabled(session.isLoading)
+    }
+
+    private var guestButton: some View {
+        Button {
+            focus = nil
+            session.continueAsGuest()
+        } label: {
+            Text("Continue as Guest")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.8))
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+                .background(Color.white.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .disabled(session.isLoading)
+    }
+
+    // MARK: Actions
+
+    private func switchMode(_ target: Mode) {
+        focus = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            mode = target
+            errorMessage = nil
+            confirm = ""
+        }
+    }
+
+    private func submit() {
+        guard !session.isLoading else { return }
+
+        focus = nil
+        errorMessage = validate()
+        guard errorMessage == nil else { return }
+
+        let name = username.trimmingCharacters(in: .whitespaces)
+        let mail = email.trimmingCharacters(in: .whitespaces)
+        let pass = password
+        let currentMode = mode
+
+        Task { @MainActor in
+            do {
+                switch currentMode {
+                case .login:
+                    try await session.login(identifier: name, password: pass)
+                case .register:
+                    try await session.register(username: name, email: mail, password: pass)
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func validate() -> String? {
+        let name = username.trimmingCharacters(in: .whitespaces)
+
+        switch mode {
+        case .login:
+            if name.isEmpty || password.isEmpty {
+                return "Please enter your username and password."
+            }
+        case .register:
+            if name.count < 3 {
+                return "Username must be at least 3 characters."
+            }
+            if !isValidEmail(email) {
+                return "Please enter a valid email address."
+            }
+            if password.count < 6 {
+                return "Password must be at least 6 characters."
+            }
+            if password != confirm {
+                return "Passwords do not match."
+            }
+        }
+        return nil
+    }
+
+    private func isValidEmail(_ value: String) -> Bool {
+        let parts = value.trimmingCharacters(in: .whitespaces).split(separator: "@")
+        return parts.count == 2 && !parts[0].isEmpty && parts[1].contains(".")
+    }
+}
+
+// MARK: - Neon Text Field
+
+struct NeonField: View {
+    let icon: String
+    let placeholder: String
+    @Binding var text: String
+    let field: AuthField
+    let focus: FocusState<AuthField?>.Binding
+    var isSecure = false
+    var keyboard: UIKeyboardType = .default
+    var contentType: UITextContentType? = nil
+    var submitLabel: SubmitLabel = .next
+    var onSubmit: () -> Void = {}
+
+    @State private var reveal = false
+
+    private var isFocused: Bool { focus.wrappedValue == field }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(isFocused ? Color.cyan : Color.gray)
+                .frame(width: 20)
+
+            Group {
+                if isSecure && !reveal {
+                    SecureField("", text: $text, prompt: Text(placeholder).foregroundColor(.gray))
+                } else {
+                    TextField("", text: $text, prompt: Text(placeholder).foregroundColor(.gray))
+                }
+            }
+            .focused(focus, equals: field)
+            .font(.system(size: 15))
+            .foregroundStyle(.white)
+            .keyboardType(keyboard)
+            .textContentType(contentType)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(submitLabel)
+            .onSubmit(onSubmit)
+
+            if isSecure {
+                Button {
+                    reveal.toggle()
+                } label: {
+                    Image(systemName: reveal ? "eye.slash.fill" : "eye.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(Color.gray)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 50)
+        .background(Color.white.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(isFocused ? Color.cyan.opacity(0.8) : Color.white.opacity(0.10), lineWidth: 1)
+        }
+        .shadow(color: isFocused ? Color.cyan.opacity(0.25) : Color.clear, radius: 8)
+        .animation(.easeOut(duration: 0.15), value: isFocused)
     }
 }
 
@@ -126,6 +702,7 @@ struct MainTabView: View {
 
 struct HomeView: View {
     let onExploreTools: () -> Void
+    @EnvironmentObject private var session: SessionManager
     @State private var pulse = false
 
     private let features = [
@@ -134,20 +711,13 @@ struct HomeView: View {
         ("star.fill", "Premium Mods", "Exclusive modded features")
     ]
 
+    private var displayName: String {
+        session.user?.username ?? "Player"
+    }
+
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            Circle()
-                .fill(Color.cyan.opacity(0.12))
-                .frame(width: 250, height: 250)
-                .blur(radius: 70)
-                .offset(x: 80, y: -120)
+            NeonBackground()
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 20) {
@@ -155,9 +725,10 @@ struct HomeView: View {
                     // Top Header
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Welcome Back")
+                            Text("Welcome back, \(displayName)")
                                 .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(.gray)
+                                .lineLimit(1)
                             Text("DoniMods")
                                 .font(.system(size: 26, weight: .black, design: .rounded))
                                 .foregroundStyle(
@@ -170,7 +741,7 @@ struct HomeView: View {
                                 .shadow(color: .cyan.opacity(0.5), radius: 6)
                         }
 
-                        Spacer()
+                        Spacer(minLength: 8)
 
                         HStack(spacing: 6) {
                             Circle()
@@ -193,7 +764,7 @@ struct HomeView: View {
                     }
                     .padding(.top, 8)
 
-                    // Hero Banner (tự co giãn theo nội dung, không khóa chiều cao)
+                    // Hero Banner
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             Image(systemName: "gamecontroller.fill")
@@ -381,18 +952,19 @@ struct ToolsView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            NeonBackground()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     NeonPageHeader(title: "Tools", subtitle: "Select a tool to get started.")
 
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 12),
+                            GridItem(.flexible(), spacing: 12)
+                        ],
+                        spacing: 12
+                    ) {
                         ForEach(tools, id: \.0) { tool in
                             VStack(alignment: .leading, spacing: 12) {
                                 ZStack {
@@ -447,22 +1019,26 @@ struct ToolsView: View {
 // MARK: - Profile
 
 struct ProfileView: View {
+    @EnvironmentObject private var session: SessionManager
+    @State private var showLogoutConfirm = false
+
     private let stats = [("Mods Used", "0"), ("Sessions", "0"), ("Rank", "—")]
+
+    private var isGuest: Bool { session.user?.isGuest ?? true }
+
+    private var displayName: String {
+        isGuest ? "Guest Player" : (session.user?.username ?? "Player")
+    }
+
+    private var subtitle: String {
+        if isGuest { return "Login to save your progress" }
+        if let mail = session.user?.email, !mail.isEmpty { return mail }
+        return "Signed in"
+    }
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-
-            Circle()
-                .fill(Color.cyan.opacity(0.08))
-                .frame(width: 300, height: 300)
-                .blur(radius: 60)
-                .offset(y: -100)
+            NeonBackground(glowOffset: CGSize(width: 0, height: -140))
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 24) {
@@ -481,7 +1057,11 @@ struct ProfileView: View {
 
                         Circle()
                             .stroke(
-                                LinearGradient(colors: [.cyan, .blue], startPoint: .topLeading, endPoint: .bottomTrailing),
+                                LinearGradient(
+                                    colors: [.cyan, .blue],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
                                 lineWidth: 2
                             )
                             .frame(width: 90, height: 90)
@@ -493,11 +1073,11 @@ struct ProfileView: View {
                     }
 
                     VStack(spacing: 6) {
-                        Text("Guest Player")
+                        Text(displayName)
                             .font(.system(size: 22, weight: .black))
                             .foregroundStyle(.white)
 
-                        Text("Login coming soon")
+                        Text(subtitle)
                             .font(.system(size: 13))
                             .foregroundStyle(.gray)
                     }
@@ -530,27 +1110,61 @@ struct ProfileView: View {
                             .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
                     }
 
-                    Button(action: {}) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "person.badge.plus")
-                            Text("Login / Register")
-                                .font(.system(size: 15, weight: .bold))
+                    if isGuest {
+                        Button {
+                            session.logout()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "person.badge.plus")
+                                Text("Login / Register")
+                                    .font(.system(size: 15, weight: .bold))
+                            }
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .background(
+                                LinearGradient(
+                                    colors: [.cyan, .blue],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .shadow(color: .cyan.opacity(0.3), radius: 8, y: 4)
                         }
-                        .foregroundStyle(.black)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .background(
-                            LinearGradient(colors: [.cyan, .blue], startPoint: .leading, endPoint: .trailing)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .shadow(color: .cyan.opacity(0.3), radius: 8, y: 4)
+                        .buttonStyle(.plain)
+                    } else {
+                        Button {
+                            showLogoutConfirm = true
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "rectangle.portrait.and.arrow.right")
+                                Text("Log out")
+                                    .font(.system(size: 15, weight: .bold))
+                            }
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 48)
+                            .background(Color.red.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14)
+                                    .stroke(Color.red.opacity(0.35), lineWidth: 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 20)
             }
+        }
+        .confirmationDialog("Log out of DoniMods?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+            Button("Log out", role: .destructive) {
+                session.logout()
+            }
+            Button("Cancel", role: .cancel) {}
         }
     }
 }
@@ -563,12 +1177,7 @@ struct SettingsView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            NeonBackground()
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 20) {
