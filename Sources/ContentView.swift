@@ -60,27 +60,50 @@ enum AuthError: LocalizedError {
 }
 
 // MARK: - Auth Service
-// Khi có server: tạo struct mới (ví dụ APIAuthService) conform AuthService,
-// rồi đổi MockAuthService() thành APIAuthService() trong SessionManager.init.
 
 protocol AuthService {
-    func login(identifier: String, password: String) async throws -> AuthUser
+    func login(username: String, key: String) async throws -> AuthUser
 }
 
-/// Service giả: chấp nhận mọi thông tin hợp lệ, KHÔNG gửi gì lên server.
-struct MockAuthService: AuthService {
-    func login(identifier: String, password: String) async throws -> AuthUser {
-        try await Task.sleep(nanoseconds: 800_000_000)
+/// Calls the DoniMods License API. Set apiBaseURL to your deployed Vercel URL.
+struct APIAuthService: AuthService {
+    // Example: https://your-project.vercel.app
+    private let apiBaseURL = "https://doni-mods-license-system.vercel.app"
 
-        let id = identifier.trimmingCharacters(in: .whitespaces)
-        if id.contains("@") {
-            let name = String(id.split(separator: "@").first ?? "Player")
-            return AuthUser(username: name, email: id)
-        }
-        return AuthUser(username: id, email: "")
+    private struct RequestBody: Encodable { let username: String; let key: String }
+    private struct ResponseBody: Decodable {
+        let valid: Bool
+        let code: String?
+        let message: String?
+        let username: String?
+        let expires_at: String?
     }
 
-
+    func login(username: String, key: String) async throws -> AuthUser {
+        guard !apiBaseURL.contains("YOUR-VERCEL-DOMAIN") else {
+            throw AuthError.custom("Chưa cấu hình URL API Vercel trong ContentView.swift.")
+        }
+        guard let url = URL(string: apiBaseURL + "/api/validate") else {
+            throw AuthError.custom("URL API không hợp lệ.")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        request.httpBody = try JSONEncoder().encode(RequestBody(username: username, key: key))
+        let (data, response): (Data, URLResponse)
+        do { (data, response) = try await URLSession.shared.data(for: request) }
+        catch { throw AuthError.custom("Không kết nối được máy chủ. Hãy kiểm tra Internet.") }
+        guard let http = response as? HTTPURLResponse else { throw AuthError.network }
+        let result = try? JSONDecoder().decode(ResponseBody.self, from: data)
+        guard http.statusCode == 200, let result else {
+            throw AuthError.custom(result?.message ?? "Máy chủ trả về lỗi (HTTP \(http.statusCode)).")
+        }
+        guard result.valid else {
+            throw AuthError.custom(result.message ?? result.code ?? "License key không hợp lệ.")
+        }
+        return AuthUser(username: result.username ?? username, email: "", isGuest: false)
+    }
 }
 
 // MARK: - Session Manager
@@ -95,15 +118,15 @@ final class SessionManager: ObservableObject {
 
     var isLoggedIn: Bool { user != nil }
 
-    init(service: AuthService = MockAuthService()) {
+    init(service: AuthService = APIAuthService()) {
         self.service = service
         self.user = Self.loadStoredUser()
     }
 
-    func login(identifier: String, password: String) async throws {
+    func login(username: String, key: String) async throws {
         isLoading = true
         defer { isLoading = false }
-        let user = try await service.login(identifier: identifier, password: password)
+        let user = try await service.login(username: username, key: key)
         setUser(user)
     }
 
@@ -204,9 +227,8 @@ struct AuthView: View {
     @EnvironmentObject private var session: SessionManager
 
     @State private var username = ""
-    @State private var password = ""
+    @State private var licenseKey = ""
     @State private var errorMessage: String?
-    @State private var showForgotAlert = false
     @FocusState private var focus: AuthField?
 
     var body: some View {
@@ -229,11 +251,6 @@ struct AuthView: View {
                 .padding(.bottom, 30)
             }
             .scrollDismissesKeyboard(.interactively)
-        }
-        .alert("Reset password", isPresented: $showForgotAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("Password reset will be available once the server is connected.")
         }
     }
 
@@ -283,7 +300,7 @@ struct AuthView: View {
         VStack(spacing: 12) {
             NeonField(
                 icon: "person.fill",
-                placeholder: "Username or email",
+                placeholder: "Username",
                 text: $username,
                 field: .username,
                 focus: $focus,
@@ -293,25 +310,24 @@ struct AuthView: View {
             )
 
             NeonField(
-                icon: "lock.fill",
-                placeholder: "Password",
-                text: $password,
+                icon: "key.fill",
+                placeholder: "License Key",
+                text: $licenseKey,
                 field: .password,
                 focus: $focus,
-                isSecure: true,
-                contentType: .password,
+                isSecure: false,
+                contentType: nil,
                 submitLabel: .go,
                 onSubmit: { submit() }
             )
 
-            HStack {
-                Spacer()
-                Button("Forgot password?") {
-                    showForgotAlert = true
-                }
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(.cyan.opacity(0.85))
+            HStack(spacing: 6) {
+                Image(systemName: "shield.lefthalf.filled")
+                Text("License key is verified securely by the server.")
             }
+            .font(.system(size: 11))
+            .foregroundStyle(.gray)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 2)
         }
         .padding(16)
@@ -379,15 +395,16 @@ struct AuthView: View {
         focus = nil
 
         let name = username.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty, !password.isEmpty else {
-            errorMessage = "Please enter your username and password."
+        let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !key.isEmpty else {
+            errorMessage = "Please enter your username and license key."
             return
         }
         errorMessage = nil
 
         Task { @MainActor in
             do {
-                try await session.login(identifier: name, password: password)
+                try await session.login(username: name, key: key)
             } catch {
                 errorMessage = error.localizedDescription
             }
