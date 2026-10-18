@@ -1,7 +1,7 @@
 
 import SwiftUI
 
-// MARK: - Main View
+// MARK: - App Root
 
 struct ContentView: View {
     @State private var showSplash = true
@@ -9,7 +9,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            Color(uiColor: .systemBackground)
+            Color.black
                 .ignoresSafeArea()
 
             MainTabView(selectedTab: $selectedTab)
@@ -25,14 +25,14 @@ struct ContentView: View {
         .task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
 
-            withAnimation(.easeInOut(duration: 0.55)) {
+            withAnimation(.easeInOut(duration: 0.45)) {
                 showSplash = false
             }
         }
     }
 }
 
-// MARK: - Navigation
+// MARK: - Tabs
 
 enum AppTab: String, CaseIterable {
     case home = "Home"
@@ -95,39 +95,38 @@ struct SplashView: View {
 
             Rectangle()
                 .fill(.ultraThinMaterial)
-                .opacity(0.18)
+                .opacity(0.12)
                 .ignoresSafeArea()
 
-            VStack(spacing: 14) {
+            VStack(spacing: 13) {
                 Text("DoniMods")
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
-                    .tracking(1.2)
+                    .font(.system(size: 36, weight: .semibold, design: .rounded))
+                    .tracking(1)
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 30)
-                    .padding(.vertical, 18)
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 17)
                     .background {
                         RoundedRectangle(cornerRadius: 22)
                             .fill(.ultraThinMaterial)
-                            .environment(\.colorScheme, .dark)
                             .overlay {
                                 RoundedRectangle(cornerRadius: 22)
                                     .stroke(
-                                        .white.opacity(0.24),
+                                        .white.opacity(0.22),
                                         lineWidth: 1
                                     )
                             }
                     }
-                    .shadow(color: .white.opacity(0.10), radius: 28)
+                    .shadow(color: .white.opacity(0.08), radius: 24)
 
                 Text("WELCOME")
                     .font(.system(size: 10, weight: .medium))
                     .tracking(5)
                     .foregroundStyle(.white.opacity(0.48))
             }
-            .scaleEffect(animateLogo ? 1 : 0.92)
+            .scaleEffect(animateLogo ? 1 : 0.94)
             .opacity(animateLogo ? 1 : 0)
             .onAppear {
-                withAnimation(.easeOut(duration: 0.7)) {
+                withAnimation(.easeOut(duration: 0.65)) {
                     animateLogo = true
                 }
             }
@@ -141,82 +140,129 @@ struct SplashView: View {
 struct HomeView: View {
     var body: some View {
         NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 26) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text("DONIMODS")
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(3)
-                            .foregroundStyle(.secondary)
+            GeometryReader { geometry in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        // Welcome heading
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("DONIMODS")
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(3)
+                                .foregroundStyle(.secondary)
 
-                        Text("Welcome back.")
-                            .font(.system(size: 32, weight: .bold))
-                            .foregroundStyle(.white)
+                            Text("Welcome back.")
+                                .font(.system(size: 30, weight: .bold))
+                                .foregroundStyle(.white)
+                                .minimumScaleFactor(0.8)
+                                .lineLimit(1)
 
-                        Text("Your gaming companion.")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    HStack(spacing: 14) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 25, weight: .medium))
-                            .foregroundStyle(.white)
-                            .frame(width: 54, height: 54)
-                            .background(.white.opacity(0.09))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("DoniMods")
-                                .font(.system(size: 18, weight: .semibold))
-
-                            Text("Your tools, all in one place.")
-                                .font(.system(size: 13))
+                            Text("Your gaming companion.")
+                                .font(.system(size: 15))
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Spacer()
-                    }
-                    .padding(18)
-                    .background(Color.white.opacity(0.045))
-                    .clipShape(RoundedRectangle(cornerRadius: 22))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 22)
-                            .stroke(.white.opacity(0.08), lineWidth: 1)
-                    }
+                        // Main app card
+                        HStack(spacing: 14) {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 23, weight: .medium))
+                                .foregroundStyle(.white)
+                                .frame(width: 52, height: 52)
+                                .background(.white.opacity(0.08))
+                                .clipShape(
+                                    RoundedRectangle(cornerRadius: 16)
+                                )
 
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("QUICK ACCESS")
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(2)
-                            .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text("DoniMods")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundStyle(.white)
 
-                        NavigationLink {
-                            ToolsView()
-                        } label: {
-                            HStack {
-                                Label("Explore Tools", systemImage: "square.grid.2x2")
-                                    .font(.system(size: 15, weight: .medium))
-                                Spacer()
-                                Image(systemName: "arrow.up.right")
+                                Text("Your tools, all in one place.")
+                                    .font(.system(size: 13))
                                     .foregroundStyle(.secondary)
+                                    .fixedSize(
+                                        horizontal: false,
+                                        vertical: true
+                                    )
                             }
-                            .foregroundStyle(.white)
-                            .padding(18)
-                            .background(Color.white.opacity(0.055))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                        }
-                    }
 
-                    Text("More features coming soon.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.tertiary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 8)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.white.opacity(0.045))
+                        .clipShape(RoundedRectangle(cornerRadius: 21))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 21)
+                                .stroke(
+                                    .white.opacity(0.08),
+                                    lineWidth: 1
+                                )
+                        }
+
+                        // Quick access
+                        VStack(alignment: .leading, spacing: 13) {
+                            Text("QUICK ACCESS")
+                                .font(.system(size: 11, weight: .semibold))
+                                .tracking(2)
+                                .foregroundStyle(.secondary)
+
+                            NavigationLink {
+                                ToolsView()
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "square.grid.2x2")
+                                        .font(.system(size: 17))
+
+                                    Text("Explore Tools")
+                                        .font(
+                                            .system(
+                                                size: 15,
+                                                weight: .medium
+                                            )
+                                        )
+
+                                    Spacer()
+
+                                    Image(systemName: "arrow.up.right")
+                                        .font(
+                                            .system(
+                                                size: 16,
+                                                weight: .medium
+                                            )
+                                        )
+                                        .foregroundStyle(.secondary)
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 17)
+                                .frame(height: 56)
+                                .background(.white.opacity(0.055))
+                                .clipShape(
+                                    RoundedRectangle(cornerRadius: 17)
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Text("More features coming soon.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white.opacity(0.42))
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 1)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 20)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: 520)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: geometry.size.height,
+                        alignment: .top
+                    )
                 }
-                .padding(22)
+                .background(Color.black)
             }
-            .background(Color(uiColor: .systemBackground))
             .toolbar(.hidden, for: .navigationBar)
         }
     }
@@ -225,56 +271,85 @@ struct HomeView: View {
 // MARK: - Tools
 
 struct ToolsView: View {
-    private let tools: [(String, String, String)] = [
-        ("Game Tools", "square.grid.2x2", "Game utilities"),
-        ("Performance", "speedometer", "Performance options"),
-        ("Coming Soon", "sparkles", "More tools are on the way")
+    private let tools: [(title: String, icon: String, subtitle: String)] = [
+        (
+            title: "Game Tools",
+            icon: "square.grid.2x2",
+            subtitle: "Game utilities"
+        ),
+        (
+            title: "Performance",
+            icon: "speedometer",
+            subtitle: "Performance options"
+        ),
+        (
+            title: "Coming Soon",
+            icon: "sparkles",
+            subtitle: "More tools are on the way"
+        )
     ]
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 22) {
-                    pageHeader(
+                    PageHeader(
                         title: "Tools",
                         subtitle: "Your gaming utilities."
                     )
 
-                    ForEach(tools, id: \.0) { tool in
-                        HStack(spacing: 15) {
-                            Image(systemName: tool.1)
-                                .font(.system(size: 20))
-                                .frame(width: 48, height: 48)
-                                .background(.white.opacity(0.07))
-                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                    VStack(spacing: 12) {
+                        ForEach(tools, id: \.title) { tool in
+                            HStack(spacing: 14) {
+                                Image(systemName: tool.icon)
+                                    .font(.system(size: 19))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 46, height: 46)
+                                    .background(.white.opacity(0.07))
+                                    .clipShape(
+                                        RoundedRectangle(cornerRadius: 14)
+                                    )
 
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(tool.0)
-                                    .font(.system(size: 16, weight: .semibold))
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(tool.title)
+                                        .font(
+                                            .system(
+                                                size: 15,
+                                                weight: .semibold
+                                            )
+                                        )
+                                        .foregroundStyle(.white)
 
-                                Text(tool.2)
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
+                                    Text(tool.subtitle)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(
+                                        .system(size: 11, weight: .semibold)
+                                    )
+                                    .foregroundStyle(.tertiary)
                             }
-
-                            Spacer()
-
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.tertiary)
+                            .padding(14)
+                            .background(.white.opacity(0.045))
+                            .clipShape(RoundedRectangle(cornerRadius: 18))
                         }
-                        .padding(16)
-                        .background(.white.opacity(0.04))
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
                     }
 
-                    Text("These are interface placeholders. Tool functionality can be added later.")
+                    Text("Tool functionality will be added in future updates.")
                         .font(.system(size: 12))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
-                .padding(22)
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
+                .frame(maxWidth: 520)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .background(Color(uiColor: .systemBackground))
+            .background(Color.black)
             .toolbar(.hidden, for: .navigationBar)
         }
     }
@@ -285,38 +360,44 @@ struct ToolsView: View {
 struct ProfileView: View {
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    pageHeader(
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 22) {
+                    PageHeader(
                         title: "Profile",
                         subtitle: "Your DoniMods account."
                     )
 
                     VStack(spacing: 14) {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 76, weight: .ultraLight))
+                        Image(systemName: "person.crop.circle")
+                            .font(.system(size: 68, weight: .ultraLight))
                             .foregroundStyle(.white.opacity(0.9))
 
                         Text("Guest User")
-                            .font(.system(size: 21, weight: .semibold))
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(.white)
 
                         Text("Login feature coming soon")
                             .font(.system(size: 13))
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 35)
-                    .background(.white.opacity(0.04))
-                    .clipShape(RoundedRectangle(cornerRadius: 24))
+                    .padding(.vertical, 32)
+                    .background(.white.opacity(0.045))
+                    .clipShape(RoundedRectangle(cornerRadius: 22))
 
                     Text("Your profile and account options will appear here.")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
                 }
-                .padding(22)
+                .padding(.horizontal, 24)
+                .padding(.top, 20)
+                .padding(.bottom, 24)
+                .frame(maxWidth: 520)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .background(Color(uiColor: .systemBackground))
+            .background(Color.black)
             .toolbar(.hidden, for: .navigationBar)
         }
     }
@@ -332,8 +413,15 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Preferences") {
-                    Toggle("Haptic Feedback", isOn: $hapticsEnabled)
-                    Toggle("Animations", isOn: $animationsEnabled)
+                    Toggle(
+                        "Haptic Feedback",
+                        isOn: $hapticsEnabled
+                    )
+
+                    Toggle(
+                        "Animations",
+                        isOn: $animationsEnabled
+                    )
                 }
 
                 Section("About") {
@@ -354,29 +442,34 @@ struct SettingsView: View {
 
                 Section {
                     Text("More settings will be added in future updates.")
-                        .font(.system(size: 13))
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
             }
             .scrollContentBackground(.hidden)
-            .background(Color(uiColor: .systemBackground))
+            .background(Color.black)
             .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }
 
 // MARK: - Shared Header
 
-@ViewBuilder
-func pageHeader(title: String, subtitle: String) -> some View {
-    VStack(alignment: .leading, spacing: 7) {
-        Text(title)
-            .font(.system(size: 32, weight: .bold))
-            .foregroundStyle(.white)
+struct PageHeader: View {
+    let title: String
+    let subtitle: String
 
-        Text(subtitle)
-            .font(.system(size: 15))
-            .foregroundStyle(.secondary)
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 30, weight: .bold))
+                .foregroundStyle(.white)
+
+            Text(subtitle)
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
 }
