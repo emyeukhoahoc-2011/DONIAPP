@@ -39,7 +39,6 @@ struct SplashView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            // Background glow
             Circle()
                 .fill(Color.cyan.opacity(0.15))
                 .frame(width: 300, height: 300)
@@ -132,12 +131,11 @@ struct HomeView: View {
     private let features = [
         ("bolt.fill", "Speed Boost", "Optimize game performance instantly"),
         ("shield.fill", "Protection", "Anti-ban & safety tools"),
-        ("star.fill", "Premium Mods", "Exclusive modded features"),
+        ("star.fill", "Premium Mods", "Exclusive modded features")
     ]
 
     var body: some View {
         ZStack {
-            // Background
             LinearGradient(
                 colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
                 startPoint: .top,
@@ -145,7 +143,6 @@ struct HomeView: View {
             )
             .ignoresSafeArea()
 
-            // Top glow accent
             Circle()
                 .fill(Color.cyan.opacity(0.12))
                 .frame(width: 250, height: 250)
@@ -175,7 +172,6 @@ struct HomeView: View {
 
                         Spacer()
 
-                        // Status badge
                         HStack(spacing: 6) {
                             Circle()
                                 .fill(Color.green)
@@ -197,8 +193,63 @@ struct HomeView: View {
                     }
                     .padding(.top, 8)
 
-                    // Hero Banner
-                    ZStack {
+                    // Hero Banner (tự co giãn theo nội dung, không khóa chiều cao)
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Image(systemName: "gamecontroller.fill")
+                                .font(.system(size: 28))
+                                .foregroundStyle(.cyan)
+                                .shadow(color: .cyan, radius: 8)
+
+                            Spacer()
+
+                            Text("v1.0.0")
+                                .font(.system(size: 11, weight: .bold))
+                                .tracking(1)
+                                .foregroundStyle(.cyan.opacity(0.7))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.cyan.opacity(0.1))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+
+                        Text("Your Ultimate\nGame Toolbox")
+                            .font(.system(size: 22, weight: .black))
+                            .foregroundStyle(.white)
+                            .lineSpacing(2)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text("Access powerful mods, tweaks and tools to level up your gaming experience.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Button(action: onExploreTools) {
+                            HStack(spacing: 8) {
+                                Text("Explore Tools")
+                                    .font(.system(size: 14, weight: .bold))
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 12, weight: .bold))
+                            }
+                            .foregroundStyle(.black)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(
+                                LinearGradient(
+                                    colors: [.cyan, .blue],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .shadow(color: .cyan.opacity(0.4), radius: 8, y: 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(20)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background {
                         RoundedRectangle(cornerRadius: 20)
                             .fill(
                                 LinearGradient(
@@ -211,7 +262,8 @@ struct HomeView: View {
                                     endPoint: .bottomTrailing
                                 )
                             )
-
+                    }
+                    .overlay {
                         RoundedRectangle(cornerRadius: 20)
                             .stroke(
                                 LinearGradient(
@@ -221,63 +273,9 @@ struct HomeView: View {
                                 ),
                                 lineWidth: 1
                             )
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            HStack {
-                                Image(systemName: "gamecontroller.fill")
-                                    .font(.system(size: 28))
-                                    .foregroundStyle(.cyan)
-                                    .shadow(color: .cyan, radius: 8)
-
-                                Spacer()
-
-                                Text("v1.0.0")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .tracking(1)
-                                    .foregroundStyle(.cyan.opacity(0.7))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.cyan.opacity(0.1))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            }
-
-                            Text("Your Ultimate\nGame Toolbox")
-                                .font(.system(size: 22, weight: .black))
-                                .foregroundStyle(.white)
-                                .lineSpacing(2)
-
-                            Text("Access powerful mods, tweaks and tools to level up your gaming experience.")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.white.opacity(0.6))
-                                .lineSpacing(3)
-
-                            Button(action: onExploreTools) {
-                                HStack(spacing: 8) {
-                                    Text("Explore Tools")
-                                        .font(.system(size: 14, weight: .bold))
-                                    Image(systemName: "arrow.right")
-                                        .font(.system(size: 12, weight: .bold))
-                                }
-                                .foregroundStyle(.black)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 44)
-                                .background(
-                                    LinearGradient(
-                                        colors: [.cyan, .blue],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .shadow(color: .cyan.opacity(0.4), radius: 8, y: 4)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(20)
                     }
-                    .frame(height: 240)
 
-                    // Features Grid
+                    // Features
                     VStack(alignment: .leading, spacing: 12) {
                         Text("FEATURES")
                             .font(.system(size: 11, weight: .black))
@@ -306,9 +304,10 @@ struct HomeView: View {
                                     Text(feature.2)
                                         .font(.system(size: 12))
                                         .foregroundStyle(.gray)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
 
-                                Spacer()
+                                Spacer(minLength: 0)
 
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 11))
@@ -340,7 +339,7 @@ struct HomeView: View {
                                 .foregroundStyle(.gray)
                         }
 
-                        Spacer()
+                        Spacer(minLength: 0)
 
                         Text("SOON")
                             .font(.system(size: 10, weight: .black))
@@ -393,7 +392,7 @@ struct ToolsView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     NeonPageHeader(title: "Tools", subtitle: "Select a tool to get started.")
 
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                         ForEach(tools, id: \.0) { tool in
                             VStack(alignment: .leading, spacing: 12) {
                                 ZStack {
@@ -410,13 +409,14 @@ struct ToolsView: View {
                                     Text(tool.0)
                                         .font(.system(size: 13, weight: .bold))
                                         .foregroundStyle(.white)
+                                        .fixedSize(horizontal: false, vertical: true)
                                     Text(tool.1)
                                         .font(.system(size: 11))
                                         .foregroundStyle(.gray)
-                                        .lineLimit(2)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
 
-                                Spacer()
+                                Spacer(minLength: 0)
 
                                 HStack {
                                     Spacer()
@@ -426,7 +426,7 @@ struct ToolsView: View {
                                 }
                             }
                             .padding(14)
-                            .frame(height: 130)
+                            .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
                             .background(Color.white.opacity(0.05))
                             .clipShape(RoundedRectangle(cornerRadius: 16))
                             .overlay {
@@ -468,7 +468,6 @@ struct ProfileView: View {
                 VStack(spacing: 24) {
                     NeonPageHeader(title: "Profile", subtitle: "Your gaming identity.")
 
-                    // Avatar
                     ZStack {
                         Circle()
                             .fill(
@@ -503,7 +502,6 @@ struct ProfileView: View {
                             .foregroundStyle(.gray)
                     }
 
-                    // Stats row
                     HStack(spacing: 0) {
                         ForEach(Array(stats.enumerated()), id: \.0) { index, stat in
                             VStack(spacing: 4) {
@@ -532,7 +530,6 @@ struct ProfileView: View {
                             .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
                     }
 
-                    // Login button
                     Button(action: {}) {
                         HStack(spacing: 8) {
                             Image(systemName: "person.badge.plus")
@@ -577,11 +574,26 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     NeonPageHeader(title: "Settings", subtitle: "Configure your experience.")
 
-                    // Toggles
                     VStack(spacing: 0) {
-                        NeonSettingsRow(title: "Notifications", subtitle: "Enable push notifications", icon: "bell.fill", iconColor: .cyan, isOn: $notificationsEnabled)
-                        Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 56)
-                        NeonSettingsRow(title: "Haptic Feedback", subtitle: "Enable touch vibration", icon: "iphone.radiowaves.left.and.right", iconColor: .purple, isOn: $hapticsEnabled)
+                        NeonSettingsRow(
+                            title: "Notifications",
+                            subtitle: "Enable push notifications",
+                            icon: "bell.fill",
+                            iconColor: .cyan,
+                            isOn: $notificationsEnabled
+                        )
+
+                        Divider()
+                            .overlay(Color.white.opacity(0.07))
+                            .padding(.leading, 56)
+
+                        NeonSettingsRow(
+                            title: "Haptic Feedback",
+                            subtitle: "Enable touch vibration",
+                            icon: "iphone.radiowaves.left.and.right",
+                            iconColor: .purple,
+                            isOn: $hapticsEnabled
+                        )
                     }
                     .background(Color.white.opacity(0.05))
                     .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -590,7 +602,6 @@ struct SettingsView: View {
                             .stroke(Color.cyan.opacity(0.15), lineWidth: 1)
                     }
 
-                    // About
                     VStack(alignment: .leading, spacing: 14) {
                         Text("ABOUT")
                             .font(.system(size: 11, weight: .black))
@@ -672,7 +683,7 @@ struct NeonSettingsRow: View {
                     .foregroundStyle(.gray)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Toggle("", isOn: $isOn)
                 .labelsHidden()
@@ -692,9 +703,7 @@ struct NeonPageHeader: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.system(size: 28, weight: .black))
-                .foregroundStyle(
-                    LinearGradient(colors: [.white, .white.opacity(0.8)], startPoint: .leading, endPoint: .trailing)
-                )
+                .foregroundStyle(.white)
             Text(subtitle)
                 .font(.system(size: 13))
                 .foregroundStyle(.gray)
