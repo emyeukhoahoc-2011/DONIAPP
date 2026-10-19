@@ -1,4 +1,5 @@
 import SwiftUI
+import QuartzCore
 
 // MARK: - App Entry
 
@@ -769,79 +770,233 @@ struct HomeView: View {
 
 // MARK: - Tools
 
+enum DONIToolSheet: String, Identifiable {
+    case fps = "FPS Counter"
+    case crosshair = "Crosshair"
+    var id: String { rawValue }
+}
+
 struct ToolsView: View {
-    private let tools: [(String, String, String, Color)] = [
-        ("Game Mods", "Active game modifications", "bolt.fill", .cyan),
-        ("Speed Hack", "Game speed controller", "speedometer", .purple),
-        ("Aimbot Tools", "Precision aim assist", "scope", .pink),
-        ("Skin Changer", "Custom game skins", "paintbrush.fill", .orange),
-        ("ESP / Wallhack", "Visual enhancement tools", "eye.fill", .green),
-        ("Coming Soon", "More tools coming soon", "clock.fill", .gray)
+    @State private var selectedTool: DONIToolSheet?
+
+    private let tools: [(String, String, String, Color, DONIToolSheet?)] = [
+        ("FPS Counter", "Show app rendering FPS", "speedometer", .green, .fps),
+        ("Custom Crosshair", "Choose crosshair color and size", "scope", .cyan, .crosshair),
+        ("Game Mods", "Game modification tools", "bolt.fill", .cyan, nil),
+        ("Speed Hack", "Game speed controller", "hare.fill", .purple, nil),
+        ("Skin Changer", "Custom game skins", "paintbrush.fill", .orange, nil),
+        ("Coming Soon", "More tools coming soon", "clock.fill", .gray, nil)
     ]
 
     var body: some View {
         ZStack {
             NeonBackground()
-
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
-                    NeonPageHeader(title: "Tools", subtitle: "Select a tool to get started.")
-
-                    LazyVGrid(
-                        columns: [
-                            GridItem(.flexible(), spacing: 12),
-                            GridItem(.flexible(), spacing: 12)
-                        ],
-                        spacing: 12
-                    ) {
+                    NeonPageHeader(title: "Tools", subtitle: "FPS and crosshair utilities.")
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                         ForEach(tools, id: \.0) { tool in
-                            VStack(alignment: .leading, spacing: 12) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(tool.3.opacity(0.15))
-                                        .frame(width: 40, height: 40)
-                                    Image(systemName: tool.2)
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundStyle(tool.3)
-                                        .shadow(color: tool.3.opacity(0.8), radius: 4)
+                            Button {
+                                if let destination = tool.4 { selectedTool = destination }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 10).fill(tool.3.opacity(0.15)).frame(width: 40, height: 40)
+                                        Image(systemName: tool.2).font(.system(size: 16, weight: .semibold)).foregroundStyle(tool.3)
+                                    }
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(tool.0).font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                                        Text(tool.1).font(.system(size: 11)).foregroundStyle(.gray).fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    Spacer(minLength: 0)
+                                    HStack {
+                                        Text(tool.4 == nil ? "SOON" : "OPEN").font(.system(size: 9, weight: .black)).tracking(1).foregroundStyle(tool.3)
+                                        Spacer()
+                                        Image(systemName: "arrow.right.circle.fill").font(.system(size: 18)).foregroundStyle(tool.3.opacity(0.7))
+                                    }
                                 }
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(tool.0)
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Text(tool.1)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.gray)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-
-                                Spacer(minLength: 0)
-
-                                HStack {
-                                    Spacer()
-                                    Image(systemName: "arrow.right.circle.fill")
-                                        .font(.system(size: 18))
-                                        .foregroundStyle(tool.3.opacity(0.6))
-                                }
+                                .padding(14)
+                                .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
+                                .background(Color.white.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                                .overlay { RoundedRectangle(cornerRadius: 16).stroke(tool.3.opacity(0.25), lineWidth: 1) }
                             }
-                            .padding(14)
-                            .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
-                            .background(Color.white.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 16)
-                                    .stroke(tool.3.opacity(0.25), lineWidth: 1)
-                            }
+                            .buttonStyle(.plain)
+                            .disabled(tool.4 == nil)
                         }
                     }
+                    Text("FPS is measured for DONIAPP's own interface, not another game's FPS. iOS does not normally allow an app to draw an overlay over another game.")
+                        .font(.system(size: 11)).foregroundStyle(.gray).fixedSize(horizontal: false, vertical: true)
+                        .padding(12).background(Color.white.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius: 12))
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 20)
+                .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 20)
             }
         }
+        .sheet(item: $selectedTool) { tool in
+            NavigationStack {
+                Group {
+                    switch tool {
+                    case .fps: DONIFPSToolView()
+                    case .crosshair: DONICrosshairToolView()
+                    }
+                }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { selectedTool = nil }.tint(.cyan)
+                    }
+                }
+            }
+            .preferredColorScheme(.dark)
+        }
+    }
+}
+
+// MARK: - FPS Counter (DONIAPP UI only)
+
+final class DONIFPSCounter: ObservableObject {
+    @Published var fps = 0
+    private var displayLink: CADisplayLink?
+    private var frameCount = 0
+    private var lastTimestamp: CFTimeInterval = 0
+
+    func start() {
+        guard displayLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(update(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    @objc private func update(_ link: CADisplayLink) {
+        frameCount += 1
+        if lastTimestamp == 0 { lastTimestamp = link.timestamp; return }
+        let elapsed = link.timestamp - lastTimestamp
+        if elapsed >= 1 {
+            fps = Int((Double(frameCount) / elapsed).rounded())
+            frameCount = 0
+            lastTimestamp = link.timestamp
+        }
+    }
+
+    func stop() {
+        displayLink?.invalidate(); displayLink = nil
+        frameCount = 0; lastTimestamp = 0; fps = 0
+    }
+    deinit { displayLink?.invalidate() }
+}
+
+struct DONIFPSToolView: View {
+    @StateObject private var counter = DONIFPSCounter()
+    @AppStorage("doni_fps_enabled") private var enabled = true
+    var body: some View {
+        ZStack {
+            NeonBackground()
+            VStack(spacing: 18) {
+                Image(systemName: "speedometer").font(.system(size: 42)).foregroundStyle(.green).shadow(color: .green, radius: 10)
+                if enabled {
+                    Text("\(counter.fps)").font(.system(size: 64, weight: .black, design: .rounded)).foregroundStyle(.green)
+                    Text("FPS · DONIAPP UI").font(.system(size: 12, weight: .bold)).tracking(2).foregroundStyle(.gray)
+                } else {
+                    Text("FPS Counter is disabled in Settings").font(.system(size: 13, weight: .medium)).foregroundStyle(.gray).multilineTextAlignment(.center)
+                }
+                Text("Số đo này phản ánh nhịp cập nhật giao diện của DONIAPP khi màn hình đang mở, không đọc FPS của game khác.")
+                    .font(.system(size: 12)).foregroundStyle(.gray).multilineTextAlignment(.center).padding(.horizontal, 28)
+            }
+        }
+        .navigationTitle("FPS Counter")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if enabled { counter.start() } }
+        .onChange(of: enabled) { _, isEnabled in
+            if isEnabled { counter.start() } else { counter.stop() }
+        }
+        .onDisappear { counter.stop() }
+    }
+}
+
+// MARK: - Custom Crosshair
+
+struct DONICrosshairShape: View {
+    let hexColor: String
+    let size: CGFloat
+    let thickness: CGFloat
+
+    private var tint: Color {
+        let hex = hexColor.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        let value = UInt64(hex, radix: 16) ?? 0x00FF88
+        return Color(red: Double((value >> 16) & 0xFF) / 255,
+                     green: Double((value >> 8) & 0xFF) / 255,
+                     blue: Double(value & 0xFF) / 255)
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(tint).frame(width: thickness, height: size)
+            Rectangle().fill(tint).frame(width: size, height: thickness)
+            Circle().fill(tint).frame(width: thickness * 1.5, height: thickness * 1.5)
+        }
+        .shadow(color: tint.opacity(0.8), radius: 5)
+        .accessibilityLabel("Custom crosshair preview")
+    }
+}
+
+struct DONICrosshairToolView: View {
+    @AppStorage("doni_crosshair_enabled") private var enabled = true
+    @AppStorage("doni_crosshair_color") private var selectedColor = "00FF88"
+    @AppStorage("doni_crosshair_size") private var crosshairSize = 32.0
+    @AppStorage("doni_crosshair_thickness") private var crosshairThickness = 3.0
+
+    private let colors: [(String, Color)] = [
+        ("00FF88", .green), ("FF3333", .red), ("00AAFF", .cyan),
+        ("CC66FF", .purple), ("FFFFFF", .white), ("FFB000", .orange)
+    ]
+
+    var body: some View {
+        ZStack {
+            NeonBackground()
+            ScrollView {
+                VStack(spacing: 22) {
+                    NeonPageHeader(title: "Crosshair", subtitle: "Customize your on-screen preview.")
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.6))
+                        if enabled {
+                            DONICrosshairShape(hexColor: selectedColor, size: CGFloat(crosshairSize), thickness: CGFloat(crosshairThickness))
+                        } else {
+                            Text("Crosshair disabled").font(.system(size: 12)).foregroundStyle(.gray)
+                        }
+                    }
+                    .frame(height: 220)
+                    .overlay { RoundedRectangle(cornerRadius: 18).stroke(Color.cyan.opacity(0.2), lineWidth: 1) }
+
+                    VStack(spacing: 0) {
+                        NeonSettingsRow(title: "Enable Crosshair", subtitle: "Show the preview below", icon: "scope", iconColor: .cyan, isOn: $enabled)
+                        Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 56)
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack { Text("Size"); Spacer(); Text("\(Int(crosshairSize)) pt").foregroundStyle(.cyan) }
+                            Slider(value: $crosshairSize, in: 12...72, step: 2).tint(.cyan)
+                            HStack { Text("Thickness"); Spacer(); Text("\(Int(crosshairThickness)) pt").foregroundStyle(.cyan) }
+                            Slider(value: $crosshairThickness, in: 1...8, step: 1).tint(.cyan)
+                        }
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.white).padding(14)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("COLOR").font(.system(size: 10, weight: .black)).tracking(2).foregroundStyle(.gray)
+                            HStack(spacing: 14) {
+                                ForEach(colors, id: \.0) { item in
+                                    Button { selectedColor = item.0 } label: {
+                                        Circle().fill(item.1).frame(width: 32, height: 32)
+                                            .overlay { Circle().stroke(selectedColor == item.0 ? Color.white : Color.clear, lineWidth: 3).padding(-4) }
+                                    }.buttonStyle(.plain)
+                                }
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
+                    }
+                    .background(Color.white.opacity(0.05)).clipShape(RoundedRectangle(cornerRadius: 16))
+                    Text("Tâm ngắm chỉ hiển thị trong màn hình DONIAPP; iOS không cho ứng dụng thông thường phủ lên game khác.")
+                        .font(.system(size: 11)).foregroundStyle(.gray).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(20)
+            }
+        }
+        .navigationTitle("Crosshair")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -975,6 +1130,8 @@ struct ProfileView: View {
 struct SettingsView: View {
     @AppStorage("doni_notifications_enabled") private var notificationsEnabled = true
     @AppStorage("doni_haptics_enabled") private var hapticsEnabled = true
+    @AppStorage("doni_fps_enabled") private var fpsEnabled = true
+    @AppStorage("doni_crosshair_enabled") private var crosshairEnabled = true
 
     var body: some View {
         ZStack {
@@ -1011,6 +1168,15 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: 16)
                             .stroke(Color.cyan.opacity(0.15), lineWidth: 1)
                     }
+
+                    VStack(spacing: 0) {
+                        NeonSettingsRow(title: "FPS Counter", subtitle: "Enable FPS tool in DONIAPP", icon: "speedometer", iconColor: .green, isOn: $fpsEnabled)
+                        Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 56)
+                        NeonSettingsRow(title: "Crosshair", subtitle: "Enable crosshair preview", icon: "scope", iconColor: .cyan, isOn: $crosshairEnabled)
+                    }
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay { RoundedRectangle(cornerRadius: 16).stroke(Color.cyan.opacity(0.15), lineWidth: 1) }
 
                     VStack(alignment: .leading, spacing: 14) {
                         Text("ABOUT")
