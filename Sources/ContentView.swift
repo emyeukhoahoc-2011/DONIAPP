@@ -1,5 +1,6 @@
 import SwiftUI
 import QuartzCore
+import NetworkExtension
 
 // MARK: - App Entry
 
@@ -480,387 +481,578 @@ struct NeonField: View {
     }
 }
 
-// MARK: - Network Manager
 
-@MainActor
-final class NetworkManager: ObservableObject {
-    @Published private(set) var isConnected = false
-    @Published private(set) var isConnecting = false
-    @Published private(set) var statusMessage = "Chưa kết nối"
-    @Published private(set) var statusColor: Color = .gray
-    @Published private(set) var log: [String] = []
+// MARK: - Server Model
 
-    private var inputStream: InputStream?
-    private var outputStream: OutputStream?
-
+struct ServerConfig: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
     let host: String
     let port: Int
+    let flag: String
+}
 
-    init(host: String = "1123.123.123.123", port: Int = 1233) {
-        self.host = host
-        self.port = port
+let predefinedServers: [ServerConfig] = [
+    ServerConfig(name: "Mindo",    host: "103.183.120.157",    port: 1300, flag: "🌐"),
+    ServerConfig(name: "SonDev",   host: "proxy.sondev.io.vn", port: 1299, flag: "🛡️"),
+]
+
+// MARK: - Proxy Credentials Store
+
+final class ProxyCredentials: ObservableObject {
+    static let shared = ProxyCredentials()
+    private let usernameKey = "doni_proxy_username"
+    private let passwordKey = "doni_proxy_password"
+
+    @Published var username: String {
+        didSet { UserDefaults.standard.set(username, forKey: usernameKey) }
+    }
+    @Published var password: String {
+        didSet { UserDefaults.standard.set(password, forKey: passwordKey) }
     }
 
-    func connect() {
-        guard !isConnected, !isConnecting else { return }
-        isConnecting = true
-        statusMessage = "Đang kết nối..."
-        statusColor = .orange
-        addLog("⏳ Đang kết nối tới \(host):\(port)...")
+    private init() {
+        username = UserDefaults.standard.string(forKey: "doni_proxy_username") ?? ""
+        password = UserDefaults.standard.string(forKey: "doni_proxy_password") ?? ""
+    }
+}
 
-        var readStream: Unmanaged<CFReadStream>?
-        var writeStream: Unmanaged<CFWriteStream>?
-        CFStreamCreatePairWithSocketToHost(
-            nil,
-            host as CFString,
-            UInt32(port),
-            &readStream,
-            &writeStream
-        )
+// MARK: - VPN / Proxy Manager
 
-        guard let rs = readStream?.takeRetainedValue(),
-              let ws = writeStream?.takeRetainedValue() else {
-            setFailed("Không tạo được stream")
-            return
-        }
+@MainActor
+final class VPNManager: ObservableObject {
+    static let shared = VPNManager()
 
-        inputStream  = rs as InputStream
-        outputStream = ws as OutputStream
-        inputStream?.open()
-        outputStream?.open()
+    @Published private(set) var status: NEVPNStatus = .disconnected
+    @Published private(set) var connectedServer: ServerConfig?
+    @Published private(set) var statusMessage = "Chưa kết nối"
+    @Published private(set) var log: [String] = []
 
-        Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            await checkConnection()
+    private var vpnManager: NETunnelProviderManager?
+    private var statusObserver: Any?
+
+    private init() {
+        Task { await loadManager() }
+        startObserving()
+    }
+
+    private func loadManager() async {
+        do {
+            let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+            vpnManager = managers.first ?? NETunnelProviderManager()
+        } catch {
+            addLog("⚠️ Không tải được config: \(error.localizedDescription)")
         }
     }
 
-    private func checkConnection() async {
-        guard let out = outputStream else { setFailed("Không có stream"); return }
-        isConnecting = false
-        if out.streamStatus == .open || out.streamStatus == .writing {
-            isConnected = true
-            statusMessage = "Đã kết nối · \(host):\(port)"
-            statusColor = .green
+    private func startObserving() {
+        statusObserver = NotificationCenter.default.addObserver(
+            forName: .NEVPNStatusDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshStatus() }
+        }
+    }
+
+    private func refreshStatus() {
+        guard let mgr = vpnManager else { return }
+        status = mgr.connection.status
+        switch status {
+        case .connected:
+            statusMessage = "Đã kết nối · \(connectedServer?.name ?? "")"
             addLog("✅ Kết nối thành công!")
-        } else {
-            let reason = out.streamError?.localizedDescription ?? "Server từ chối kết nối"
-            setFailed(reason)
+        case .connecting:
+            statusMessage = "Đang kết nối..."
+        case .disconnecting:
+            statusMessage = "Đang ngắt kết nối..."
+        case .disconnected:
+            statusMessage = connectedServer == nil ? "Chưa kết nối" : "Đã ngắt kết nối"
+            if connectedServer != nil { addLog("🔌 Đã ngắt kết nối") }
+        case .reasserting:
+            statusMessage = "Đang kết nối lại..."
+        case .invalid:
+            statusMessage = "Cấu hình không hợp lệ"
+        @unknown default: break
+        }
+    }
+
+    func connect(to server: ServerConfig, username: String, password: String) async {
+        connectedServer = server
+        addLog("⏳ Kết nối tới \(server.name) (\(server.host):\(server.port))...")
+        addLog("👤 User: \(username)")
+        do {
+            let mgr = vpnManager ?? NETunnelProviderManager()
+            let proto = NETunnelProviderProtocol()
+            proto.providerBundleIdentifier = "com.doni.doniapp.vpn"
+            proto.serverAddress = server.host
+            proto.providerConfiguration = [
+                "host":     server.host,
+                "port":     server.port,
+                "username": username,
+                "password": password,
+                "name":     server.name
+            ]
+            mgr.protocolConfiguration = proto
+            mgr.localizedDescription = "DoniMods — \(server.name)"
+            mgr.isEnabled = true
+            try await mgr.saveToPreferences()
+            try await mgr.loadFromPreferences()
+            vpnManager = mgr
+            try mgr.connection.startVPNTunnel()
+        } catch {
+            addLog("❌ Lỗi: \(error.localizedDescription)")
+            statusMessage = error.localizedDescription
+            connectedServer = nil
         }
     }
 
     func disconnect() {
-        inputStream?.close()
-        outputStream?.close()
-        inputStream  = nil
-        outputStream = nil
-        isConnected  = false
-        isConnecting = false
-        statusMessage = "Đã ngắt kết nối"
-        statusColor   = .gray
+        vpnManager?.connection.stopVPNTunnel()
         addLog("🔌 Đã ngắt kết nối")
     }
 
-    func toggle() {
-        if isConnected || isConnecting { disconnect() } else { connect() }
+    func addLog(_ line: String) {
+        let t = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        log.append("[\(t)] \(line)")
+        if log.count > 80 { log.removeFirst() }
     }
-
-    private func setFailed(_ reason: String) {
-        isConnected  = false
-        isConnecting = false
-        statusMessage = reason
-        statusColor   = .red
-        addLog("❌ Lỗi: \(reason)")
-        inputStream?.close(); outputStream?.close()
-        inputStream  = nil;  outputStream  = nil
-    }
-
-    private func addLog(_ line: String) {
-        let time = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        log.append("[\(time)] \(line)")
-        if log.count > 50 { log.removeFirst() }
-    }
-
     func clearLog() { log.removeAll() }
+
+    var isConnected: Bool  { status == .connected }
+    var isConnecting: Bool { status == .connecting || status == .reasserting }
+    var statusColor: Color {
+        switch status {
+        case .connected:                 return .green
+        case .connecting, .reasserting,
+             .disconnecting:             return .orange
+        default:                         return .gray
+        }
+    }
 }
 
-// MARK: - Main View (Network Only)
+// MARK: - Main View
 
 struct MainView: View {
     @EnvironmentObject private var session: SessionManager
-    @StateObject private var network = NetworkManager()
-    @State private var pulse = false
-    @State private var showLog = false
-    @State private var showLogoutConfirm = false
+    @ObservedObject private var vpn   = VPNManager.shared
+    @ObservedObject private var creds = ProxyCredentials.shared
 
-    private var statusIcon: String {
-        if network.isConnecting { return "arrow.trianglehead.2.clockwise.rotate.90" }
-        return network.isConnected
-            ? "antenna.radiowaves.left.and.right"
-            : "antenna.radiowaves.left.and.right.slash"
+    @State private var selectedServer: ServerConfig? = nil
+    @State private var showLogoutConfirm = false
+    @State private var showLog   = false
+    @State private var pulse     = false
+    @State private var showPass  = false
+    @FocusState private var focusField: CredField?
+
+    enum CredField { case username, password }
+
+    // Validation
+    private var canConnect: Bool {
+        selectedServer != nil &&
+        !creds.username.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !creds.password.isEmpty
     }
 
     var body: some View {
         ZStack {
-            // Background
-            ZStack {
-                LinearGradient(
-                    colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
-                    startPoint: .top, endPoint: .bottom
-                )
-                Circle()
-                    .fill(network.statusColor.opacity(0.08))
-                    .frame(width: 300, height: 300)
-                    .blur(radius: 80)
-                    .offset(x: 60, y: -140)
-                    .animation(.easeInOut(duration: 1.0), value: network.statusColor)
-            }
-            .ignoresSafeArea()
-
+            background
             VStack(spacing: 0) {
-                // Top bar
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("DoniMods")
-                            .font(.system(size: 22, weight: .black, design: .rounded))
-                            .foregroundStyle(
-                                LinearGradient(colors: [.cyan, .blue],
-                                               startPoint: .leading, endPoint: .trailing)
-                            )
-                        Text("Hi, \(session.user?.username ?? "Player")")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.gray)
-                    }
-                    Spacer()
-                    Button {
-                        showLogoutConfirm = true
-                    } label: {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.gray)
-                            .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(0.06))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 16)
-                .padding(.bottom, 20)
-
+                topBar
                 ScrollView(showsIndicators: false) {
-                    VStack(spacing: 18) {
-
-                        // Big Status Circle
-                        ZStack {
-                            // Outer pulse ring
-                            Circle()
-                                .stroke(network.statusColor.opacity(0.15), lineWidth: 20)
-                                .frame(width: 180, height: 180)
-                                .scaleEffect(pulse && network.isConnected ? 1.15 : 1.0)
-                                .animation(
-                                    network.isConnected
-                                        ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true)
-                                        : .easeInOut(duration: 0.4),
-                                    value: pulse
-                                )
-
-                            // Mid ring
-                            Circle()
-                                .stroke(network.statusColor.opacity(0.3), lineWidth: 2)
-                                .frame(width: 160, height: 160)
-                                .shadow(color: network.statusColor.opacity(0.6), radius: 12)
-
-                            // Fill
-                            Circle()
-                                .fill(network.statusColor.opacity(0.1))
-                                .frame(width: 148, height: 148)
-
-                            // Icon
-                            VStack(spacing: 8) {
-                                Image(systemName: statusIcon)
-                                    .font(.system(size: 42, weight: .medium))
-                                    .foregroundStyle(network.statusColor)
-                                    .shadow(color: network.statusColor, radius: 10)
-                                    .rotationEffect(network.isConnecting ? .degrees(360) : .zero)
-                                    .animation(
-                                        network.isConnecting
-                                            ? .linear(duration: 1.0).repeatForever(autoreverses: false)
-                                            : .default,
-                                        value: network.isConnecting
-                                    )
-
-                                Text(network.isConnecting ? "CONNECTING" :
-                                     network.isConnected  ? "ONLINE" : "OFFLINE")
-                                    .font(.system(size: 10, weight: .black))
-                                    .tracking(2)
-                                    .foregroundStyle(network.statusColor)
-                            }
-                        }
-                        .padding(.vertical, 10)
-                        .animation(.easeInOut(duration: 0.4), value: network.isConnected)
-
-                        // Status message
-                        Text(network.statusMessage)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.gray)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 40)
-
-                        // Big Toggle Button
-                        Button {
-                            network.toggle()
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: network.isConnected ? "poweroff" : "power")
-                                    .font(.system(size: 16, weight: .bold))
-                                Text(network.isConnecting ? "Đang kết nối..." :
-                                     network.isConnected  ? "Ngắt kết nối" : "Kết nối")
-                                    .font(.system(size: 16, weight: .bold))
-                            }
-                            .foregroundStyle(network.isConnected ? .black : .black)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 54)
-                            .background(
-                                network.isConnected
-                                    ? LinearGradient(colors: [.red.opacity(0.9), .red],
-                                                     startPoint: .leading, endPoint: .trailing)
-                                    : LinearGradient(colors: [.cyan, .blue],
-                                                     startPoint: .leading, endPoint: .trailing)
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                            .shadow(
-                                color: (network.isConnected ? Color.red : Color.cyan).opacity(0.4),
-                                radius: 12, y: 4
-                            )
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(network.isConnecting)
-                        .padding(.horizontal, 4)
-                        .animation(.easeInOut(duration: 0.3), value: network.isConnected)
-
-                        // Server Info Card
-                        VStack(spacing: 0) {
-                            infoRow(
-                                icon: "server.rack", iconColor: .cyan,
-                                label: "Host", value: network.host
-                            )
-                            Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
-                            infoRow(
-                                icon: "network", iconColor: .purple,
-                                label: "Port", value: "\(network.port)"
-                            )
-                            Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
-                            infoRow(
-                                icon: "lock.shield.fill", iconColor: .orange,
-                                label: "Protocol", value: "TCP"
-                            )
-                        }
-                        .background(Color.white.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color.cyan.opacity(0.13), lineWidth: 1)
-                        }
-
-                        // Log toggle
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.25)) { showLog.toggle() }
-                        } label: {
-                            HStack {
-                                Image(systemName: "terminal")
-                                    .font(.system(size: 13))
-                                Text("Connection Log")
-                                    .font(.system(size: 13, weight: .semibold))
-                                Spacer()
-                                Image(systemName: showLog ? "chevron.up" : "chevron.down")
-                                    .font(.system(size: 11))
-                            }
-                            .foregroundStyle(.cyan.opacity(0.8))
-                            .padding(14)
-                            .background(Color.cyan.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
-                            }
-                        }
-                        .buttonStyle(.plain)
-
-                        if showLog {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack {
-                                    Text("LOG")
-                                        .font(.system(size: 10, weight: .black))
-                                        .tracking(2)
-                                        .foregroundStyle(.gray)
-                                    Spacer()
-                                    Button("Clear") { network.clearLog() }
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.gray)
-                                        .buttonStyle(.plain)
-                                }
-                                if network.log.isEmpty {
-                                    Text("Chưa có log nào.")
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.gray.opacity(0.6))
-                                        .frame(maxWidth: .infinity, alignment: .center)
-                                        .padding(.vertical, 10)
-                                } else {
-                                    ForEach(network.log.reversed(), id: \.self) { line in
-                                        Text(line)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundStyle(.white.opacity(0.7))
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                    }
-                                }
-                            }
-                            .padding(14)
-                            .background(Color.black.opacity(0.4))
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
-                            }
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
+                    VStack(spacing: 16) {
+                        statusCircle
+                        serverList
+                        credentialsCard
+                        connectButton
+                        logSection
                     }
                     .padding(.horizontal, 20)
-                    .padding(.bottom, 30)
+                    .padding(.bottom, 34)
                 }
             }
         }
         .onAppear { pulse = true }
-        .confirmationDialog("Đăng xuất khỏi DoniMods?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button("Đăng xuất", role: .destructive) {
-                network.disconnect()
-                session.logout()
-            }
+        .confirmationDialog("Đăng xuất?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+            Button("Đăng xuất", role: .destructive) { vpn.disconnect(); session.logout() }
             Button("Huỷ", role: .cancel) {}
         }
     }
 
-    @ViewBuilder
-    private func infoRow(icon: String, iconColor: Color, label: String, value: String) -> some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(iconColor.opacity(0.15))
-                    .frame(width: 34, height: 34)
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundStyle(iconColor)
-            }
-            Text(label)
-                .font(.system(size: 13))
-                .foregroundStyle(.gray)
-            Spacer()
-            Text(value)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
+    // MARK: Background
+    private var background: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
+                startPoint: .top, endPoint: .bottom
+            )
+            Circle()
+                .fill(vpn.statusColor.opacity(0.09))
+                .frame(width: 320, height: 320)
+                .blur(radius: 80)
+                .offset(x: 50, y: -160)
+                .animation(.easeInOut(duration: 0.8), value: vpn.statusColor)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .ignoresSafeArea()
+    }
+
+    // MARK: Top Bar
+    private var topBar: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("DoniMods")
+                    .font(.system(size: 22, weight: .black, design: .rounded))
+                    .foregroundStyle(LinearGradient(
+                        colors: [.cyan, .blue], startPoint: .leading, endPoint: .trailing
+                    ))
+                Text("Hi, \(session.user?.username ?? "Player")")
+                    .font(.system(size: 12)).foregroundStyle(.gray)
+            }
+            Spacer()
+            Button { showLogoutConfirm = true } label: {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                    .font(.system(size: 15)).foregroundStyle(.gray)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.06))
+                    .clipShape(Circle())
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 16)
+        .padding(.bottom, 18)
+    }
+
+    // MARK: Status Circle
+    private var statusCircle: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .stroke(vpn.statusColor.opacity(0.12), lineWidth: 22)
+                    .frame(width: 150, height: 150)
+                    .scaleEffect(pulse && vpn.isConnected ? 1.12 : 1.0)
+                    .animation(
+                        vpn.isConnected
+                            ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
+                            : .easeInOut(duration: 0.3),
+                        value: pulse
+                    )
+                Circle()
+                    .stroke(vpn.statusColor.opacity(0.4), lineWidth: 1.5)
+                    .frame(width: 130, height: 130)
+                    .shadow(color: vpn.statusColor.opacity(0.5), radius: 10)
+                Circle()
+                    .fill(vpn.statusColor.opacity(0.08))
+                    .frame(width: 120, height: 120)
+
+                VStack(spacing: 7) {
+                    Image(systemName: vpn.isConnected
+                          ? "shield.lefthalf.filled"
+                          : vpn.isConnecting
+                            ? "arrow.trianglehead.2.clockwise.rotate.90"
+                            : "shield.slash")
+                        .font(.system(size: 36, weight: .medium))
+                        .foregroundStyle(vpn.statusColor)
+                        .shadow(color: vpn.statusColor, radius: 8)
+                        .rotationEffect(vpn.isConnecting ? .degrees(360) : .zero)
+                        .animation(
+                            vpn.isConnecting
+                                ? .linear(duration: 1.0).repeatForever(autoreverses: false)
+                                : .default,
+                            value: vpn.isConnecting
+                        )
+                    Text(vpn.isConnecting ? "CONNECTING" : vpn.isConnected ? "PROTECTED" : "EXPOSED")
+                        .font(.system(size: 9, weight: .black)).tracking(2)
+                        .foregroundStyle(vpn.statusColor)
+                }
+            }
+            .animation(.easeInOut(duration: 0.4), value: vpn.status)
+
+            Text(vpn.statusMessage)
+                .font(.system(size: 12)).foregroundStyle(.gray)
+                .multilineTextAlignment(.center)
+        }
+        .padding(.top, 4).padding(.bottom, 2)
+    }
+
+    // MARK: Server List
+    private var serverList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("CHỌN SERVER")
+                    .font(.system(size: 11, weight: .black)).tracking(2)
+                    .foregroundStyle(.cyan.opacity(0.7))
+                Spacer()
+                if vpn.isConnected, let s = vpn.connectedServer {
+                    HStack(spacing: 4) {
+                        Circle().fill(Color.green).frame(width: 6, height: 6)
+                            .shadow(color: .green, radius: 3)
+                        Text(s.name)
+                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.green)
+                    }
+                }
+            }
+
+            VStack(spacing: 0) {
+                ForEach(predefinedServers) { server in
+                    serverRow(server)
+                    if server.id != predefinedServers.last?.id {
+                        Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
+                    }
+                }
+            }
+            .background(Color.white.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.cyan.opacity(0.13), lineWidth: 1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func serverRow(_ server: ServerConfig) -> some View {
+        let isSelected = selectedServer?.id == server.id
+        let isActive   = vpn.connectedServer?.id == server.id && vpn.isConnected
+
+        Button {
+            guard !vpn.isConnected else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                selectedServer = isSelected ? nil : server
+            }
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(isActive   ? Color.green.opacity(0.18) :
+                              isSelected ? Color.cyan.opacity(0.15)  : Color.white.opacity(0.06))
+                        .frame(width: 40, height: 40)
+                    Text(server.flag).font(.system(size: 20))
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(server.name)
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("\(server.host):\(server.port)")
+                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
+                }
+
+                Spacer()
+
+                if isActive {
+                    Text("ACTIVE")
+                        .font(.system(size: 9, weight: .black)).tracking(1).foregroundStyle(.green)
+                } else if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18)).foregroundStyle(.cyan)
+                } else {
+                    Image(systemName: "circle")
+                        .font(.system(size: 18)).foregroundStyle(.white.opacity(0.2))
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .opacity(vpn.isConnected && !isActive ? 0.4 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: isSelected)
+        .animation(.easeInOut(duration: 0.2), value: isActive)
+    }
+
+    // MARK: Credentials Card
+    private var credentialsCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("XÁC THỰC PROXY")
+                    .font(.system(size: 11, weight: .black)).tracking(2)
+                    .foregroundStyle(.cyan.opacity(0.7))
+                Spacer()
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 12)).foregroundStyle(.cyan.opacity(0.5))
+            }
+
+            VStack(spacing: 0) {
+                // Username row
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.cyan.opacity(0.12)).frame(width: 34, height: 34)
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 13)).foregroundStyle(.cyan)
+                    }
+                    TextField("", text: $creds.username,
+                              prompt: Text("Tên đăng nhập").foregroundColor(.gray))
+                        .font(.system(size: 14))
+                        .foregroundStyle(.white)
+                        .textContentType(.username)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .submitLabel(.next)
+                        .focused($focusField, equals: .username)
+                        .onSubmit { focusField = .password }
+                        .disabled(vpn.isConnected)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 13)
+
+                Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
+
+                // Password row
+                HStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.purple.opacity(0.12)).frame(width: 34, height: 34)
+                        Image(systemName: "key.fill")
+                            .font(.system(size: 13)).foregroundStyle(.purple)
+                    }
+                    Group {
+                        if showPass {
+                            TextField("", text: $creds.password,
+                                      prompt: Text("Mật khẩu").foregroundColor(.gray))
+                        } else {
+                            SecureField("", text: $creds.password,
+                                        prompt: Text("Mật khẩu").foregroundColor(.gray))
+                        }
+                    }
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+                    .textContentType(.password)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .focused($focusField, equals: .password)
+                    .onSubmit { focusField = nil }
+                    .disabled(vpn.isConnected)
+
+                    Button {
+                        showPass.toggle()
+                    } label: {
+                        Image(systemName: showPass ? "eye.slash.fill" : "eye.fill")
+                            .font(.system(size: 13)).foregroundStyle(.gray)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(vpn.isConnected)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 13)
+            }
+            .background(Color.white.opacity(0.05))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(Color.cyan.opacity(0.13), lineWidth: 1)
+            }
+
+            HStack(spacing: 5) {
+                Image(systemName: "internaldrive.fill")
+                    .font(.system(size: 10)).foregroundStyle(.gray.opacity(0.6))
+                Text("Tên đăng nhập & mật khẩu được lưu tự động trên thiết bị.")
+                    .font(.system(size: 11)).foregroundStyle(.gray.opacity(0.6))
+            }
+        }
+    }
+
+    // MARK: Connect Button
+    private var connectButton: some View {
+        Button {
+            focusField = nil
+            Task {
+                if vpn.isConnected || vpn.isConnecting {
+                    vpn.disconnect()
+                } else if let server = selectedServer {
+                    await vpn.connect(
+                        to: server,
+                        username: creds.username.trimmingCharacters(in: .whitespaces),
+                        password: creds.password
+                    )
+                }
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: vpn.isConnected ? "poweroff" : "power")
+                    .font(.system(size: 15, weight: .bold))
+                Text(
+                    vpn.isConnecting     ? "Đang kết nối..." :
+                    vpn.isConnected      ? "Ngắt kết nối"    :
+                    selectedServer == nil ? "Chọn server trước" :
+                    !canConnect          ? "Nhập thông tin xác thực" : "Kết nối"
+                )
+                .font(.system(size: 15, weight: .bold))
+            }
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity).frame(height: 52)
+            .background(
+                vpn.isConnected
+                    ? LinearGradient(colors: [.red.opacity(0.9), .red],
+                                     startPoint: .leading, endPoint: .trailing)
+                    : canConnect
+                        ? LinearGradient(colors: [.cyan, .blue],
+                                         startPoint: .leading, endPoint: .trailing)
+                        : LinearGradient(colors: [.gray.opacity(0.35), .gray.opacity(0.25)],
+                                         startPoint: .leading, endPoint: .trailing)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(
+                color: vpn.isConnected ? Color.red.opacity(0.3) :
+                       canConnect       ? Color.cyan.opacity(0.3) : .clear,
+                radius: 10, y: 4
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(vpn.isConnecting || (!vpn.isConnected && !canConnect))
+        .animation(.easeInOut(duration: 0.25), value: vpn.isConnected)
+        .animation(.easeInOut(duration: 0.15), value: canConnect)
+    }
+
+    // MARK: Log Section
+    private var logSection: some View {
+        VStack(spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.22)) { showLog.toggle() }
+            } label: {
+                HStack {
+                    Image(systemName: "terminal").font(.system(size: 12))
+                    Text("Connection Log").font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Image(systemName: showLog ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(.cyan.opacity(0.75))
+                .padding(13)
+                .background(Color.cyan.opacity(0.05))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.cyan.opacity(0.18), lineWidth: 1)
+                }
+            }.buttonStyle(.plain)
+
+            if showLog {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("LOG").font(.system(size: 10, weight: .black)).tracking(2).foregroundStyle(.gray)
+                        Spacer()
+                        Button("Clear") { vpn.clearLog() }
+                            .font(.system(size: 11)).foregroundStyle(.gray).buttonStyle(.plain)
+                    }
+                    if vpn.log.isEmpty {
+                        Text("Chưa có log.")
+                            .font(.system(size: 12)).foregroundStyle(.gray.opacity(0.5))
+                            .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 8)
+                    } else {
+                        ForEach(vpn.log.reversed(), id: \.self) { line in
+                            Text(line)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.65))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .padding(13)
+                .background(Color.black.opacity(0.45))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.07), lineWidth: 1)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
     }
 }
 
