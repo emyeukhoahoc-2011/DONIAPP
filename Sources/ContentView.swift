@@ -507,15 +507,15 @@ let patchGroups: [PatchGroup] = [
 
     PatchGroup(
         title:    "FFTH",
-        subtitle: "Free Fire Tự Hào",
+        subtitle: "Free Fire Thường ",
         icon:     "flame.fill",
         color:    .orange,
         patches: [
             PatchEntry(
-                name:           "Patch 1",
-                description:    "Mô tả patch 1",
-                fileName:       "ffth_patch1.3105",
-                targetBundleID: "com.garena.game.kgvn",
+                name:           "AIM NECK",
+                description:    "<<<>>>",
+                fileName:       "NECKTH.3105",
+                targetBundleID: "com.dts.freefireth",
                 icon:           "bolt.fill",
                 color:          .orange
             ),
@@ -530,10 +530,10 @@ let patchGroups: [PatchGroup] = [
         color:    .purple,
         patches: [
             PatchEntry(
-                name:           "Patch 1",
-                description:    "Mô tả patch 1",
-                fileName:       "ffmx_patch1.3105",
-                targetBundleID: "com.garena.game.ffmx",
+                name:           "AIM NECK",
+                description:    "<<<>>>",
+                fileName:       "NECKMAX.3105",
+                targetBundleID: "com.dts.freefiremax",
                 icon:           "bolt.fill",
                 color:          .purple
             ),
