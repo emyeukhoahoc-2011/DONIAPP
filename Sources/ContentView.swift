@@ -16,7 +16,7 @@ struct ContentView: View {
                     .transition(.opacity)
                     .zIndex(1)
             } else if session.isLoggedIn {
-                MainTabView()
+                MainView()
                     .transition(.opacity)
             } else {
                 AuthView()
@@ -480,766 +480,369 @@ struct NeonField: View {
     }
 }
 
-// MARK: - Main Tabs
+// MARK: - Network Manager
 
-struct MainTabView: View {
-    @State private var selectedTab = 0
+@MainActor
+final class NetworkManager: ObservableObject {
+    @Published private(set) var isConnected = false
+    @Published private(set) var isConnecting = false
+    @Published private(set) var statusMessage = "Chưa kết nối"
+    @Published private(set) var statusColor: Color = .gray
+    @Published private(set) var log: [String] = []
 
-    init() {
-        let appearance = UITabBarAppearance()
-        appearance.configureWithOpaqueBackground()
-        appearance.backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.08, alpha: 1)
-        appearance.shadowColor = UIColor.cyan.withAlphaComponent(0.3)
-        UITabBar.appearance().standardAppearance = appearance
-        UITabBar.appearance().scrollEdgeAppearance = appearance
+    private var inputStream: InputStream?
+    private var outputStream: OutputStream?
+
+    let host: String
+    let port: Int
+
+    init(host: String = "1123.123.123.123", port: Int = 1233) {
+        self.host = host
+        self.port = port
     }
 
-    var body: some View {
-        TabView(selection: $selectedTab) {
-            HomeView { selectedTab = 1 }
-                .tabItem {
-                    Image(systemName: selectedTab == 0 ? "house.fill" : "house")
-                    Text("Home")
-                }
-                .tag(0)
+    func connect() {
+        guard !isConnected, !isConnecting else { return }
+        isConnecting = true
+        statusMessage = "Đang kết nối..."
+        statusColor = .orange
+        addLog("⏳ Đang kết nối tới \(host):\(port)...")
 
-            ToolsView()
-                .tabItem {
-                    Image(systemName: selectedTab == 1 ? "bolt.fill" : "bolt")
-                    Text("Tools")
-                }
-                .tag(1)
+        var readStream: Unmanaged<CFReadStream>?
+        var writeStream: Unmanaged<CFWriteStream>?
+        CFStreamCreatePairWithSocketToHost(
+            nil,
+            host as CFString,
+            UInt32(port),
+            &readStream,
+            &writeStream
+        )
 
-            ProfileView()
-                .tabItem {
-                    Image(systemName: selectedTab == 2 ? "person.fill" : "person")
-                    Text("Profile")
-                }
-                .tag(2)
-
-            SettingsView()
-                .tabItem {
-                    Image(systemName: selectedTab == 3 ? "gearshape.fill" : "gearshape")
-                    Text("Settings")
-                }
-                .tag(3)
+        guard let rs = readStream?.takeRetainedValue(),
+              let ws = writeStream?.takeRetainedValue() else {
+            setFailed("Không tạo được stream")
+            return
         }
-        .tint(.cyan)
+
+        inputStream  = rs as InputStream
+        outputStream = ws as OutputStream
+        inputStream?.open()
+        outputStream?.open()
+
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await checkConnection()
+        }
     }
+
+    private func checkConnection() async {
+        guard let out = outputStream else { setFailed("Không có stream"); return }
+        isConnecting = false
+        if out.streamStatus == .open || out.streamStatus == .writing {
+            isConnected = true
+            statusMessage = "Đã kết nối · \(host):\(port)"
+            statusColor = .green
+            addLog("✅ Kết nối thành công!")
+        } else {
+            let reason = out.streamError?.localizedDescription ?? "Server từ chối kết nối"
+            setFailed(reason)
+        }
+    }
+
+    func disconnect() {
+        inputStream?.close()
+        outputStream?.close()
+        inputStream  = nil
+        outputStream = nil
+        isConnected  = false
+        isConnecting = false
+        statusMessage = "Đã ngắt kết nối"
+        statusColor   = .gray
+        addLog("🔌 Đã ngắt kết nối")
+    }
+
+    func toggle() {
+        if isConnected || isConnecting { disconnect() } else { connect() }
+    }
+
+    private func setFailed(_ reason: String) {
+        isConnected  = false
+        isConnecting = false
+        statusMessage = reason
+        statusColor   = .red
+        addLog("❌ Lỗi: \(reason)")
+        inputStream?.close(); outputStream?.close()
+        inputStream  = nil;  outputStream  = nil
+    }
+
+    private func addLog(_ line: String) {
+        let time = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        log.append("[\(time)] \(line)")
+        if log.count > 50 { log.removeFirst() }
+    }
+
+    func clearLog() { log.removeAll() }
 }
 
-// MARK: - Home
+// MARK: - Main View (Network Only)
 
-struct HomeView: View {
-    let onExploreTools: () -> Void
+struct MainView: View {
     @EnvironmentObject private var session: SessionManager
+    @StateObject private var network = NetworkManager()
     @State private var pulse = false
-
-    private let features = [
-        ("bolt.fill", "Speed Boost", "Optimize game performance instantly"),
-        ("shield.fill", "Protection", "Anti-ban & safety tools"),
-        ("star.fill", "Premium Mods", "Exclusive modded features")
-    ]
-
-    private var displayName: String {
-        session.user?.username ?? "Player"
-    }
-
-    var body: some View {
-        ZStack {
-            NeonBackground()
-
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 20) {
-
-                    // Top Header
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Welcome back, \(displayName)")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(.gray)
-                                .lineLimit(1)
-                            Text("DoniMods")
-                                .font(.system(size: 26, weight: .black, design: .rounded))
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [.cyan, .blue],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                )
-                                .shadow(color: .cyan.opacity(0.5), radius: 6)
-                        }
-
-                        Spacer(minLength: 8)
-
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(Color.green)
-                                .frame(width: 7, height: 7)
-                                .shadow(color: .green, radius: 4)
-                                .scaleEffect(pulse ? 1.3 : 1.0)
-                                .animation(.easeInOut(duration: 0.8).repeatForever(), value: pulse)
-
-                            Text("ONLINE")
-                                .font(.system(size: 10, weight: .bold))
-                                .tracking(1.5)
-                                .foregroundStyle(.green)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.green.opacity(0.1))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Color.green.opacity(0.3), lineWidth: 1))
-                    }
-                    .padding(.top, 8)
-
-                    // Hero Banner
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack {
-                            Image(systemName: "gamecontroller.fill")
-                                .font(.system(size: 28))
-                                .foregroundStyle(.cyan)
-                                .shadow(color: .cyan, radius: 8)
-
-                            Spacer()
-
-                            Text("v1.0.0")
-                                .font(.system(size: 11, weight: .bold))
-                                .tracking(1)
-                                .foregroundStyle(.cyan.opacity(0.7))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.cyan.opacity(0.1))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-
-                        Text("Your Ultimate\nGame Toolbox")
-                            .font(.system(size: 22, weight: .black))
-                            .foregroundStyle(.white)
-                            .lineSpacing(2)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Text("Access powerful mods, tweaks and tools to level up your gaming experience.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.6))
-                            .lineSpacing(3)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Button(action: onExploreTools) {
-                            HStack(spacing: 8) {
-                                Text("Explore Tools")
-                                    .font(.system(size: 14, weight: .bold))
-                                Image(systemName: "arrow.right")
-                                    .font(.system(size: 12, weight: .bold))
-                            }
-                            .foregroundStyle(.black)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 44)
-                            .background(
-                                LinearGradient(
-                                    colors: [.cyan, .blue],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 12))
-                            .shadow(color: .cyan.opacity(0.4), radius: 8, y: 4)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background {
-                        RoundedRectangle(cornerRadius: 20)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.cyan.opacity(0.2),
-                                        Color.blue.opacity(0.1),
-                                        Color.clear
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 20)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [.cyan.opacity(0.6), .blue.opacity(0.2)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1
-                            )
-                    }
-
-                    // Features
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("FEATURES")
-                            .font(.system(size: 11, weight: .black))
-                            .tracking(3)
-                            .foregroundStyle(.cyan.opacity(0.7))
-
-                        ForEach(features, id: \.1) { feature in
-                            HStack(spacing: 14) {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .fill(Color.cyan.opacity(0.1))
-                                        .frame(width: 44, height: 44)
-                                    RoundedRectangle(cornerRadius: 12)
-                                        .stroke(Color.cyan.opacity(0.3), lineWidth: 1)
-                                        .frame(width: 44, height: 44)
-                                    Image(systemName: feature.0)
-                                        .font(.system(size: 16, weight: .semibold))
-                                        .foregroundStyle(.cyan)
-                                        .shadow(color: .cyan.opacity(0.6), radius: 4)
-                                }
-
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(feature.1)
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(.white)
-                                    Text(feature.2)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.gray)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-
-                                Spacer(minLength: 0)
-
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.cyan.opacity(0.5))
-                            }
-                            .padding(14)
-                            .background(Color.white.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
-                            }
-                        }
-                    }
-
-                    // Coming Soon
-                    HStack(spacing: 12) {
-                        Image(systemName: "clock.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.orange)
-                            .shadow(color: .orange.opacity(0.6), radius: 4)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("More Coming Soon")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.white)
-                            Text("New tools dropping regularly")
-                                .font(.system(size: 12))
-                                .foregroundStyle(.gray)
-                        }
-
-                        Spacer(minLength: 0)
-
-                        Text("SOON")
-                            .font(.system(size: 10, weight: .black))
-                            .tracking(1)
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.orange.opacity(0.1))
-                            .clipShape(Capsule())
-                    }
-                    .padding(14)
-                    .background(Color.orange.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(Color.orange.opacity(0.2), lineWidth: 1)
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 20)
-            }
-        }
-        .onAppear { pulse = true }
-    }
-}
-
-// MARK: - Tools
-
-enum DONIToolSheet: String, Identifiable {
-    case fps = "FPS Counter"
-    case crosshair = "Crosshair"
-    var id: String { rawValue }
-}
-
-struct ToolsView: View {
-    @State private var selectedTool: DONIToolSheet?
-
-    private let tools: [(String, String, String, Color, DONIToolSheet?)] = [
-        ("FPS Counter", "Show app rendering FPS", "speedometer", .green, .fps),
-        ("Custom Crosshair", "Choose crosshair color and size", "scope", .cyan, .crosshair),
-        ("Game Mods", "Game modification tools", "bolt.fill", .cyan, nil),
-        ("Speed Hack", "Game speed controller", "hare.fill", .purple, nil),
-        ("Skin Changer", "Custom game skins", "paintbrush.fill", .orange, nil),
-        ("Coming Soon", "More tools coming soon", "clock.fill", .gray, nil)
-    ]
-
-    var body: some View {
-        ZStack {
-            NeonBackground()
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
-                    NeonPageHeader(title: "Tools", subtitle: "FPS and crosshair utilities.")
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                        ForEach(tools, id: \.0) { tool in
-                            Button {
-                                if let destination = tool.4 { selectedTool = destination }
-                            } label: {
-                                VStack(alignment: .leading, spacing: 12) {
-                                    ZStack {
-                                        RoundedRectangle(cornerRadius: 10).fill(tool.3.opacity(0.15)).frame(width: 40, height: 40)
-                                        Image(systemName: tool.2).font(.system(size: 16, weight: .semibold)).foregroundStyle(tool.3)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(tool.0).font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
-                                        Text(tool.1).font(.system(size: 11)).foregroundStyle(.gray).fixedSize(horizontal: false, vertical: true)
-                                    }
-                                    Spacer(minLength: 0)
-                                    HStack {
-                                        Text(tool.4 == nil ? "SOON" : "OPEN").font(.system(size: 9, weight: .black)).tracking(1).foregroundStyle(tool.3)
-                                        Spacer()
-                                        Image(systemName: "arrow.right.circle.fill").font(.system(size: 18)).foregroundStyle(tool.3.opacity(0.7))
-                                    }
-                                }
-                                .padding(14)
-                                .frame(maxWidth: .infinity, minHeight: 140, alignment: .topLeading)
-                                .background(Color.white.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 16))
-                                .overlay { RoundedRectangle(cornerRadius: 16).stroke(tool.3.opacity(0.25), lineWidth: 1) }
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(tool.4 == nil)
-                        }
-                    }
-                    Text("FPS is measured for DONIAPP's own interface, not another game's FPS. iOS does not normally allow an app to draw an overlay over another game.")
-                        .font(.system(size: 11)).foregroundStyle(.gray).fixedSize(horizontal: false, vertical: true)
-                        .padding(12).background(Color.white.opacity(0.04)).clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 20)
-            }
-        }
-        .sheet(item: $selectedTool) { tool in
-            NavigationStack {
-                Group {
-                    switch tool {
-                    case .fps: DONIFPSToolView()
-                    case .crosshair: DONICrosshairToolView()
-                    }
-                }
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { selectedTool = nil }.tint(.cyan)
-                    }
-                }
-            }
-            .preferredColorScheme(.dark)
-        }
-    }
-}
-
-// MARK: - FPS Counter (DONIAPP UI only)
-
-final class DONIFPSCounter: ObservableObject {
-    @Published var fps = 0
-    private var displayLink: CADisplayLink?
-    private var frameCount = 0
-    private var lastTimestamp: CFTimeInterval = 0
-
-    func start() {
-        guard displayLink == nil else { return }
-        let link = CADisplayLink(target: self, selector: #selector(update(_:)))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
-
-    @objc private func update(_ link: CADisplayLink) {
-        frameCount += 1
-        if lastTimestamp == 0 { lastTimestamp = link.timestamp; return }
-        let elapsed = link.timestamp - lastTimestamp
-        if elapsed >= 1 {
-            fps = Int((Double(frameCount) / elapsed).rounded())
-            frameCount = 0
-            lastTimestamp = link.timestamp
-        }
-    }
-
-    func stop() {
-        displayLink?.invalidate(); displayLink = nil
-        frameCount = 0; lastTimestamp = 0; fps = 0
-    }
-    deinit { displayLink?.invalidate() }
-}
-
-struct DONIFPSToolView: View {
-    @StateObject private var counter = DONIFPSCounter()
-    @AppStorage("doni_fps_enabled") private var enabled = true
-    var body: some View {
-        ZStack {
-            NeonBackground()
-            VStack(spacing: 18) {
-                Image(systemName: "speedometer").font(.system(size: 42)).foregroundStyle(.green).shadow(color: .green, radius: 10)
-                if enabled {
-                    Text("\(counter.fps)").font(.system(size: 64, weight: .black, design: .rounded)).foregroundStyle(.green)
-                    Text("FPS · DONIAPP UI").font(.system(size: 12, weight: .bold)).tracking(2).foregroundStyle(.gray)
-                } else {
-                    Text("FPS Counter is disabled in Settings").font(.system(size: 13, weight: .medium)).foregroundStyle(.gray).multilineTextAlignment(.center)
-                }
-                Text("Số đo này phản ánh nhịp cập nhật giao diện của DONIAPP khi màn hình đang mở, không đọc FPS của game khác.")
-                    .font(.system(size: 12)).foregroundStyle(.gray).multilineTextAlignment(.center).padding(.horizontal, 28)
-            }
-        }
-        .navigationTitle("FPS Counter")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear { if enabled { counter.start() } }
-        .onChange(of: enabled) { _, isEnabled in
-            if isEnabled { counter.start() } else { counter.stop() }
-        }
-        .onDisappear { counter.stop() }
-    }
-}
-
-// MARK: - Custom Crosshair
-
-struct DONICrosshairShape: View {
-    let hexColor: String
-    let size: CGFloat
-    let thickness: CGFloat
-
-    private var tint: Color {
-        let hex = hexColor.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        let value = UInt64(hex, radix: 16) ?? 0x00FF88
-        return Color(red: Double((value >> 16) & 0xFF) / 255,
-                     green: Double((value >> 8) & 0xFF) / 255,
-                     blue: Double(value & 0xFF) / 255)
-    }
-
-    var body: some View {
-        ZStack {
-            Rectangle().fill(tint).frame(width: thickness, height: size)
-            Rectangle().fill(tint).frame(width: size, height: thickness)
-            Circle().fill(tint).frame(width: thickness * 1.5, height: thickness * 1.5)
-        }
-        .shadow(color: tint.opacity(0.8), radius: 5)
-        .accessibilityLabel("Custom crosshair preview")
-    }
-}
-
-struct DONICrosshairToolView: View {
-    @AppStorage("doni_crosshair_enabled") private var enabled = true
-    @AppStorage("doni_crosshair_color") private var selectedColor = "00FF88"
-    @AppStorage("doni_crosshair_size") private var crosshairSize = 32.0
-    @AppStorage("doni_crosshair_thickness") private var crosshairThickness = 3.0
-
-    private let colors: [(String, Color)] = [
-        ("00FF88", .green), ("FF3333", .red), ("00AAFF", .cyan),
-        ("CC66FF", .purple), ("FFFFFF", .white), ("FFB000", .orange)
-    ]
-
-    var body: some View {
-        ZStack {
-            NeonBackground()
-            ScrollView {
-                VStack(spacing: 22) {
-                    NeonPageHeader(title: "Crosshair", subtitle: "Customize your on-screen preview.")
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.6))
-                        if enabled {
-                            DONICrosshairShape(hexColor: selectedColor, size: CGFloat(crosshairSize), thickness: CGFloat(crosshairThickness))
-                        } else {
-                            Text("Crosshair disabled").font(.system(size: 12)).foregroundStyle(.gray)
-                        }
-                    }
-                    .frame(height: 220)
-                    .overlay { RoundedRectangle(cornerRadius: 18).stroke(Color.cyan.opacity(0.2), lineWidth: 1) }
-
-                    VStack(spacing: 0) {
-                        NeonSettingsRow(title: "Enable Crosshair", subtitle: "Show the preview below", icon: "scope", iconColor: .cyan, isOn: $enabled)
-                        Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 56)
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack { Text("Size"); Spacer(); Text("\(Int(crosshairSize)) pt").foregroundStyle(.cyan) }
-                            Slider(value: $crosshairSize, in: 12...72, step: 2).tint(.cyan)
-                            HStack { Text("Thickness"); Spacer(); Text("\(Int(crosshairThickness)) pt").foregroundStyle(.cyan) }
-                            Slider(value: $crosshairThickness, in: 1...8, step: 1).tint(.cyan)
-                        }
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.white).padding(14)
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("COLOR").font(.system(size: 10, weight: .black)).tracking(2).foregroundStyle(.gray)
-                            HStack(spacing: 14) {
-                                ForEach(colors, id: \.0) { item in
-                                    Button { selectedColor = item.0 } label: {
-                                        Circle().fill(item.1).frame(width: 32, height: 32)
-                                            .overlay { Circle().stroke(selectedColor == item.0 ? Color.white : Color.clear, lineWidth: 3).padding(-4) }
-                                    }.buttonStyle(.plain)
-                                }
-                            }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                    }
-                    .background(Color.white.opacity(0.05)).clipShape(RoundedRectangle(cornerRadius: 16))
-                    Text("Tâm ngắm chỉ hiển thị trong màn hình DONIAPP; iOS không cho ứng dụng thông thường phủ lên game khác.")
-                        .font(.system(size: 11)).foregroundStyle(.gray).fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(20)
-            }
-        }
-        .navigationTitle("Crosshair")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// MARK: - Profile
-
-struct ProfileView: View {
-    @EnvironmentObject private var session: SessionManager
+    @State private var showLog = false
     @State private var showLogoutConfirm = false
 
-    private let stats = [("Mods Used", "0"), ("Sessions", "0"), ("Rank", "—")]
-
-    private var displayName: String {
-        session.user?.username ?? "Player"
-    }
-
-    private var subtitle: String {
-        if let mail = session.user?.email, !mail.isEmpty { return mail }
-        return "Signed in"
+    private var statusIcon: String {
+        if network.isConnecting { return "arrow.trianglehead.2.clockwise.rotate.90" }
+        return network.isConnected
+            ? "antenna.radiowaves.left.and.right"
+            : "antenna.radiowaves.left.and.right.slash"
     }
 
     var body: some View {
         ZStack {
-            NeonBackground(glowOffset: CGSize(width: 0, height: -140))
+            // Background
+            ZStack {
+                LinearGradient(
+                    colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
+                    startPoint: .top, endPoint: .bottom
+                )
+                Circle()
+                    .fill(network.statusColor.opacity(0.08))
+                    .frame(width: 300, height: 300)
+                    .blur(radius: 80)
+                    .offset(x: 60, y: -140)
+                    .animation(.easeInOut(duration: 1.0), value: network.statusColor)
+            }
+            .ignoresSafeArea()
 
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 24) {
-                    NeonPageHeader(title: "Profile", subtitle: "Your gaming identity.")
-
-                    ZStack {
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [.cyan.opacity(0.3), .blue.opacity(0.1)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
+            VStack(spacing: 0) {
+                // Top bar
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("DoniMods")
+                            .font(.system(size: 22, weight: .black, design: .rounded))
+                            .foregroundStyle(
+                                LinearGradient(colors: [.cyan, .blue],
+                                               startPoint: .leading, endPoint: .trailing)
                             )
-                            .frame(width: 90, height: 90)
-
-                        Circle()
-                            .stroke(
-                                LinearGradient(
-                                    colors: [.cyan, .blue],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 2
-                            )
-                            .frame(width: 90, height: 90)
-                            .shadow(color: .cyan.opacity(0.4), radius: 8)
-
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 38))
-                            .foregroundStyle(.cyan.opacity(0.9))
-                    }
-
-                    VStack(spacing: 6) {
-                        Text(displayName)
-                            .font(.system(size: 22, weight: .black))
-                            .foregroundStyle(.white)
-
-                        Text(subtitle)
-                            .font(.system(size: 13))
+                        Text("Hi, \(session.user?.username ?? "Player")")
+                            .font(.system(size: 12))
                             .foregroundStyle(.gray)
                     }
-
-                    HStack(spacing: 0) {
-                        ForEach(Array(stats.enumerated()), id: \.0) { index, stat in
-                            VStack(spacing: 4) {
-                                Text(stat.1)
-                                    .font(.system(size: 20, weight: .black))
-                                    .foregroundStyle(.cyan)
-                                    .shadow(color: .cyan.opacity(0.5), radius: 4)
-                                Text(stat.0)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.gray)
-                            }
-                            .frame(maxWidth: .infinity)
-
-                            if index < stats.count - 1 {
-                                Rectangle()
-                                    .fill(Color.white.opacity(0.1))
-                                    .frame(width: 1, height: 36)
-                            }
-                        }
-                    }
-                    .padding(16)
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
-                    }
-
+                    Spacer()
                     Button {
                         showLogoutConfirm = true
                     } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: "rectangle.portrait.and.arrow.right")
-                            Text("Log out")
-                                .font(.system(size: 15, weight: .bold))
-                        }
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .background(Color.red.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(Color.red.opacity(0.35), lineWidth: 1)
-                        }
+                        Image(systemName: "rectangle.portrait.and.arrow.right")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.gray)
+                            .frame(width: 36, height: 36)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(Circle())
                     }
                     .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
                 .padding(.bottom, 20)
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 18) {
+
+                        // Big Status Circle
+                        ZStack {
+                            // Outer pulse ring
+                            Circle()
+                                .stroke(network.statusColor.opacity(0.15), lineWidth: 20)
+                                .frame(width: 180, height: 180)
+                                .scaleEffect(pulse && network.isConnected ? 1.15 : 1.0)
+                                .animation(
+                                    network.isConnected
+                                        ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true)
+                                        : .easeInOut(duration: 0.4),
+                                    value: pulse
+                                )
+
+                            // Mid ring
+                            Circle()
+                                .stroke(network.statusColor.opacity(0.3), lineWidth: 2)
+                                .frame(width: 160, height: 160)
+                                .shadow(color: network.statusColor.opacity(0.6), radius: 12)
+
+                            // Fill
+                            Circle()
+                                .fill(network.statusColor.opacity(0.1))
+                                .frame(width: 148, height: 148)
+
+                            // Icon
+                            VStack(spacing: 8) {
+                                Image(systemName: statusIcon)
+                                    .font(.system(size: 42, weight: .medium))
+                                    .foregroundStyle(network.statusColor)
+                                    .shadow(color: network.statusColor, radius: 10)
+                                    .rotationEffect(network.isConnecting ? .degrees(360) : .zero)
+                                    .animation(
+                                        network.isConnecting
+                                            ? .linear(duration: 1.0).repeatForever(autoreverses: false)
+                                            : .default,
+                                        value: network.isConnecting
+                                    )
+
+                                Text(network.isConnecting ? "CONNECTING" :
+                                     network.isConnected  ? "ONLINE" : "OFFLINE")
+                                    .font(.system(size: 10, weight: .black))
+                                    .tracking(2)
+                                    .foregroundStyle(network.statusColor)
+                            }
+                        }
+                        .padding(.vertical, 10)
+                        .animation(.easeInOut(duration: 0.4), value: network.isConnected)
+
+                        // Status message
+                        Text(network.statusMessage)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.gray)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 40)
+
+                        // Big Toggle Button
+                        Button {
+                            network.toggle()
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: network.isConnected ? "poweroff" : "power")
+                                    .font(.system(size: 16, weight: .bold))
+                                Text(network.isConnecting ? "Đang kết nối..." :
+                                     network.isConnected  ? "Ngắt kết nối" : "Kết nối")
+                                    .font(.system(size: 16, weight: .bold))
+                            }
+                            .foregroundStyle(network.isConnected ? .black : .black)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 54)
+                            .background(
+                                network.isConnected
+                                    ? LinearGradient(colors: [.red.opacity(0.9), .red],
+                                                     startPoint: .leading, endPoint: .trailing)
+                                    : LinearGradient(colors: [.cyan, .blue],
+                                                     startPoint: .leading, endPoint: .trailing)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                            .shadow(
+                                color: (network.isConnected ? Color.red : Color.cyan).opacity(0.4),
+                                radius: 12, y: 4
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(network.isConnecting)
+                        .padding(.horizontal, 4)
+                        .animation(.easeInOut(duration: 0.3), value: network.isConnected)
+
+                        // Server Info Card
+                        VStack(spacing: 0) {
+                            infoRow(
+                                icon: "server.rack", iconColor: .cyan,
+                                label: "Host", value: network.host
+                            )
+                            Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
+                            infoRow(
+                                icon: "network", iconColor: .purple,
+                                label: "Port", value: "\(network.port)"
+                            )
+                            Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
+                            infoRow(
+                                icon: "lock.shield.fill", iconColor: .orange,
+                                label: "Protocol", value: "TCP"
+                            )
+                        }
+                        .background(Color.white.opacity(0.05))
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color.cyan.opacity(0.13), lineWidth: 1)
+                        }
+
+                        // Log toggle
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.25)) { showLog.toggle() }
+                        } label: {
+                            HStack {
+                                Image(systemName: "terminal")
+                                    .font(.system(size: 13))
+                                Text("Connection Log")
+                                    .font(.system(size: 13, weight: .semibold))
+                                Spacer()
+                                Image(systemName: showLog ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 11))
+                            }
+                            .foregroundStyle(.cyan.opacity(0.8))
+                            .padding(14)
+                            .background(Color.cyan.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        if showLog {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("LOG")
+                                        .font(.system(size: 10, weight: .black))
+                                        .tracking(2)
+                                        .foregroundStyle(.gray)
+                                    Spacer()
+                                    Button("Clear") { network.clearLog() }
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.gray)
+                                        .buttonStyle(.plain)
+                                }
+                                if network.log.isEmpty {
+                                    Text("Chưa có log nào.")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.gray.opacity(0.6))
+                                        .frame(maxWidth: .infinity, alignment: .center)
+                                        .padding(.vertical, 10)
+                                } else {
+                                    ForEach(network.log.reversed(), id: \.self) { line in
+                                        Text(line)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(.white.opacity(0.7))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+                            }
+                            .padding(14)
+                            .background(Color.black.opacity(0.4))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                            }
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 30)
+                }
             }
         }
-        .confirmationDialog("Log out of DoniMods?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button("Log out", role: .destructive) {
+        .onAppear { pulse = true }
+        .confirmationDialog("Đăng xuất khỏi DoniMods?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
+            Button("Đăng xuất", role: .destructive) {
+                network.disconnect()
                 session.logout()
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Huỷ", role: .cancel) {}
         }
     }
-}
 
-// MARK: - Settings
-
-struct SettingsView: View {
-    @AppStorage("doni_notifications_enabled") private var notificationsEnabled = true
-    @AppStorage("doni_haptics_enabled") private var hapticsEnabled = true
-    @AppStorage("doni_fps_enabled") private var fpsEnabled = true
-    @AppStorage("doni_crosshair_enabled") private var crosshairEnabled = true
-
-    var body: some View {
-        ZStack {
-            NeonBackground()
-
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 20) {
-                    NeonPageHeader(title: "Settings", subtitle: "Configure your experience.")
-
-                    VStack(spacing: 0) {
-                        NeonSettingsRow(
-                            title: "Notifications",
-                            subtitle: "Enable push notifications",
-                            icon: "bell.fill",
-                            iconColor: .cyan,
-                            isOn: $notificationsEnabled
-                        )
-
-                        Divider()
-                            .overlay(Color.white.opacity(0.07))
-                            .padding(.leading, 56)
-
-                        NeonSettingsRow(
-                            title: "Haptic Feedback",
-                            subtitle: "Enable touch vibration",
-                            icon: "iphone.radiowaves.left.and.right",
-                            iconColor: .purple,
-                            isOn: $hapticsEnabled
-                        )
-                    }
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.cyan.opacity(0.15), lineWidth: 1)
-                    }
-
-                    VStack(spacing: 0) {
-                        NeonSettingsRow(title: "FPS Counter", subtitle: "Enable FPS tool in DONIAPP", icon: "speedometer", iconColor: .green, isOn: $fpsEnabled)
-                        Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 56)
-                        NeonSettingsRow(title: "Crosshair", subtitle: "Enable crosshair preview", icon: "scope", iconColor: .cyan, isOn: $crosshairEnabled)
-                    }
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay { RoundedRectangle(cornerRadius: 16).stroke(Color.cyan.opacity(0.15), lineWidth: 1) }
-
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("ABOUT")
-                            .font(.system(size: 11, weight: .black))
-                            .tracking(3)
-                            .foregroundStyle(.cyan.opacity(0.6))
-
-                        HStack {
-                            Label("Application", systemImage: "app.fill")
-                                .foregroundStyle(.white)
-                            Spacer()
-                            Text("DoniMods")
-                                .foregroundStyle(.cyan)
-                        }
-
-                        Divider().overlay(Color.white.opacity(0.07))
-
-                        HStack {
-                            Label("Version", systemImage: "tag.fill")
-                                .foregroundStyle(.white)
-                            Spacer()
-                            Text("1.0.0")
-                                .foregroundStyle(.cyan)
-                        }
-
-                        Divider().overlay(Color.white.opacity(0.07))
-
-                        HStack {
-                            Label("Developer", systemImage: "hammer.fill")
-                                .foregroundStyle(.white)
-                            Spacer()
-                            Text("Doni")
-                                .foregroundStyle(.cyan)
-                        }
-                    }
-                    .font(.system(size: 14))
-                    .padding(16)
-                    .background(Color.white.opacity(0.05))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color.cyan.opacity(0.15), lineWidth: 1)
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 20)
-            }
-        }
-    }
-}
-
-// MARK: - Neon Settings Row
-
-struct NeonSettingsRow: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    let iconColor: Color
-    @Binding var isOn: Bool
-
-    var body: some View {
-        HStack(spacing: 12) {
+    @ViewBuilder
+    private func infoRow(icon: String, iconColor: Color, label: String, value: String) -> some View {
+        HStack(spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(iconColor.opacity(0.15))
@@ -1247,45 +850,17 @@ struct NeonSettingsRow: View {
                 Image(systemName: icon)
                     .font(.system(size: 14))
                     .foregroundStyle(iconColor)
-                    .shadow(color: iconColor.opacity(0.6), radius: 3)
             }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                Text(subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.gray)
-            }
-
-            Spacer(minLength: 8)
-
-            Toggle("", isOn: $isOn)
-                .labelsHidden()
-                .tint(.cyan)
-        }
-        .padding(14)
-    }
-}
-
-// MARK: - Neon Page Header
-
-struct NeonPageHeader: View {
-    let title: String
-    let subtitle: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 28, weight: .black))
-                .foregroundStyle(.white)
-            Text(subtitle)
+            Text(label)
                 .font(.system(size: 13))
                 .foregroundStyle(.gray)
+            Spacer()
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
     }
 }
 
