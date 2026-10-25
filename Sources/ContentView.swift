@@ -1,6 +1,5 @@
 import SwiftUI
 import QuartzCore
-import NetworkExtension
 
 // MARK: - App Entry
 
@@ -481,150 +480,335 @@ struct NeonField: View {
     }
 }
 
+// MARK: - Patch Model
 
-// MARK: - Server Model
-
-struct ServerConfig: Identifiable, Equatable {
+struct PatchEntry: Identifiable {
     let id = UUID()
     let name: String
-    let host: String
-    let port: Int
-    let flag: String
+    let description: String
+    let fileName: String       // Tên file .3105 trong Sources/
+    let targetBundleID: String
+    let icon: String
+    let color: Color
 }
 
-let predefinedServers: [ServerConfig] = [
-    ServerConfig(name: "Mindo",    host: "103.183.120.157",    port: 1300, flag: "🌐"),
-    ServerConfig(name: "SonDev",   host: "proxy.sondev.io.vn", port: 1299, flag: "🛡️"),
+struct PatchGroup: Identifiable {
+    let id = UUID()
+    let title: String          // Tên nhóm hiển thị
+    let subtitle: String       // Mô tả nhóm
+    let icon: String
+    let color: Color
+    let patches: [PatchEntry]
+}
+
+// ── Danh sách nhóm patch ──────────────────────────────────────────────────
+// Thêm file .3105 vào Sources/ rồi khai báo ở đây.
+let patchGroups: [PatchGroup] = [
+
+    PatchGroup(
+        title:    "FFTH",
+        subtitle: "Free Fire Tự Hào",
+        icon:     "flame.fill",
+        color:    .orange,
+        patches: [
+            PatchEntry(
+                name:           "Patch 1",
+                description:    "Mô tả patch 1",
+                fileName:       "ffth_patch1.3105",
+                targetBundleID: "com.garena.game.kgvn",
+                icon:           "bolt.fill",
+                color:          .orange
+            ),
+            // Thêm patch FFTH ở đây ↑
+        ]
+    ),
+
+    PatchGroup(
+        title:    "FFMX",
+        subtitle: "Free Fire Max",
+        icon:     "sparkles",
+        color:    .purple,
+        patches: [
+            PatchEntry(
+                name:           "Patch 1",
+                description:    "Mô tả patch 1",
+                fileName:       "ffmx_patch1.3105",
+                targetBundleID: "com.garena.game.ffmx",
+                icon:           "bolt.fill",
+                color:          .purple
+            ),
+            // Thêm patch FFMX ở đây ↑
+        ]
+    ),
+
 ]
 
-// MARK: - Proxy Credentials Store
+// MARK: - Patch State (per patch)
 
-final class ProxyCredentials: ObservableObject {
-    static let shared = ProxyCredentials()
-    private let usernameKey = "doni_proxy_username"
-    private let passwordKey = "doni_proxy_password"
-
-    @Published var username: String {
-        didSet { UserDefaults.standard.set(username, forKey: usernameKey) }
-    }
-    @Published var password: String {
-        didSet { UserDefaults.standard.set(password, forKey: passwordKey) }
-    }
-
-    private init() {
-        username = UserDefaults.standard.string(forKey: "doni_proxy_username") ?? ""
-        password = UserDefaults.standard.string(forKey: "doni_proxy_password") ?? ""
-    }
+enum PatchStatus: Equatable {
+    case idle
+    case applying
+    case applied
+    case restoring
+    case error(String)
 }
 
-// MARK: - VPN / Proxy Manager
+// MARK: - .3105 Engine
+//
+// File .3105 là ZIP chứa cây thư mục với path tuyệt đối, ví dụ:
+//   var/mobile/Containers/Data/Application/<UUID>/Documents/config.plist
+//
+// Engine sẽ:
+//   1. Giải nén .3105 ra thư mục tạm
+//   2. Duyệt toàn bộ file bên trong
+//   3. Với mỗi file: strip prefix "var/mobile/Containers/Data/Application/<UUID>"
+//      → lấy path tương đối trong container
+//   4. Resolve UUID thật trên máy từ bundle ID
+//   5. Backup file gốc → ghi đè file mới
+//
+// Để giải nén ZIP trên iOS, dùng ZipFoundation (SPM package).
+// Thêm vào project.yml:
+//   packages:
+//     ZipFoundation:
+//       url: https://github.com/weichsel/ZIPFoundation
+//       exactVersion: "0.9.19"
+// Rồi thêm vào target:
+//   dependencies:
+//     - package: ZipFoundation
+
+import Foundation
+import ZIPFoundation
 
 @MainActor
-final class VPNManager: ObservableObject {
-    static let shared = VPNManager()
+final class PatchEngine: ObservableObject {
+    static let shared = PatchEngine()
+    private init() {}
 
-    @Published private(set) var status: NEVPNStatus = .disconnected
-    @Published private(set) var connectedServer: ServerConfig?
-    @Published private(set) var statusMessage = "Chưa kết nối"
-    @Published private(set) var log: [String] = []
+    @Published var statuses: [String: PatchStatus] = [:]
+    @Published var log: [String] = []
 
-    private var vpnManager: NETunnelProviderManager?
-    private var statusObserver: Any?
-
-    private init() {
-        Task { await loadManager() }
-        startObserving()
+    // Backup lưu trong Documents/DoniBackups/<patchFileName>/<relative path>
+    private var backupRoot: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("DoniBackups", isDirectory: true)
     }
 
-    private func loadManager() async {
+    // ── Apply ──────────────────────────────────────────────────────────────
+    func apply(_ patch: PatchEntry) async {
+        setStatus(patch, .applying)
+        addLog("▶ Áp dụng \(patch.name)...")
+
         do {
-            let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-            vpnManager = managers.first ?? NETunnelProviderManager()
+            // 1. Tìm file .3105 trong app bundle
+            let name = (patch.fileName as NSString).deletingPathExtension
+            let ext  = (patch.fileName as NSString).pathExtension
+            guard let bundleURL = Bundle.main.url(forResource: name, withExtension: ext) else {
+                throw PatchError.bundleFileNotFound(patch.fileName)
+            }
+            addLog("📦 Tìm thấy: \(patch.fileName)")
+
+            // 2. Giải nén ZIP vào thư mục tạm
+            let tmpDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+            try extractZip(at: bundleURL, to: tmpDir)
+            addLog("📂 Giải nén xong")
+
+            // 3. Resolve UUID container từ bundle ID
+            let containerUUID = try resolveContainerUUID(bundleID: patch.targetBundleID)
+            let containerRoot = URL(fileURLWithPath: "/var/mobile/Containers/Data/Application")
+                .appendingPathComponent(containerUUID)
+            addLog("🔍 Container: \(containerUUID)")
+
+            // 4. Enumerate tất cả file trong tmpDir
+            //    Path trong ZIP dạng: var/mobile/Containers/Data/Application/<UUID>/xxx/yyy
+            //    → tách lấy phần sau UUID → đó là relative path trong container
+            let fm = FileManager.default
+            guard let enumerator = fm.enumerator(
+                at: tmpDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else { throw PatchError.cannotEnumerate }
+
+            var applied = 0
+            let containerPrefix = "var/mobile/Containers/Data/Application/"
+
+            while let srcURL = enumerator.nextObject() as? URL {
+                guard (try? srcURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+                else { continue }
+
+                // Lấy path tương đối so với tmpDir
+                var relPath = srcURL.path
+                    .replacingOccurrences(of: tmpDir.path + "/", with: "")
+
+                // Strip "var/mobile/Containers/Data/Application/<UUID>/"
+                if relPath.hasPrefix(containerPrefix) {
+                    let afterPrefix = String(relPath.dropFirst(containerPrefix.count))
+                    // afterPrefix = "<UUID>/Documents/..." → bỏ UUID đầu
+                    if let slashIdx = afterPrefix.firstIndex(of: "/") {
+                        relPath = String(afterPrefix[afterPrefix.index(after: slashIdx)...])
+                    } else {
+                        continue // chỉ là folder UUID, không phải file
+                    }
+                }
+                // Nếu không có prefix container thì dùng thẳng relPath
+                // (trường hợp .3105 chỉ chứa path tương đối)
+
+                let destURL = containerRoot.appendingPathComponent(relPath)
+
+                // Backup file gốc (chỉ lần đầu)
+                if fm.fileExists(atPath: destURL.path) {
+                    try backupFile(at: destURL, patchFileName: patch.fileName, relativePath: relPath)
+                }
+
+                // Tạo thư mục cha nếu cần
+                let parentDir = destURL.deletingLastPathComponent()
+                if !fm.fileExists(atPath: parentDir.path) {
+                    try fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
+                }
+
+                // Ghi đè
+                if fm.fileExists(atPath: destURL.path) {
+                    try fm.removeItem(at: destURL)
+                }
+                try fm.copyItem(at: srcURL, to: destURL)
+                addLog("✅ \(relPath)")
+                applied += 1
+            }
+
+            guard applied > 0 else { throw PatchError.noFilesFound }
+            addLog("🎉 Đã ghi đè \(applied) file.")
+            setStatus(patch, .applied)
+
         } catch {
-            addLog("⚠️ Không tải được config: \(error.localizedDescription)")
+            addLog("❌ \(error.localizedDescription)")
+            setStatus(patch, .error(error.localizedDescription))
         }
     }
 
-    private func startObserving() {
-        statusObserver = NotificationCenter.default.addObserver(
-            forName: .NEVPNStatusDidChange, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refreshStatus() }
-        }
-    }
+    // ── Restore ────────────────────────────────────────────────────────────
+    func restore(_ patch: PatchEntry) async {
+        setStatus(patch, .restoring)
+        addLog("↩ Khôi phục \(patch.name)...")
 
-    private func refreshStatus() {
-        guard let mgr = vpnManager else { return }
-        status = mgr.connection.status
-        switch status {
-        case .connected:
-            statusMessage = "Đã kết nối · \(connectedServer?.name ?? "")"
-            addLog("✅ Kết nối thành công!")
-        case .connecting:
-            statusMessage = "Đang kết nối..."
-        case .disconnecting:
-            statusMessage = "Đang ngắt kết nối..."
-        case .disconnected:
-            statusMessage = connectedServer == nil ? "Chưa kết nối" : "Đã ngắt kết nối"
-            if connectedServer != nil { addLog("🔌 Đã ngắt kết nối") }
-        case .reasserting:
-            statusMessage = "Đang kết nối lại..."
-        case .invalid:
-            statusMessage = "Cấu hình không hợp lệ"
-        @unknown default: break
-        }
-    }
-
-    func connect(to server: ServerConfig, username: String, password: String) async {
-        connectedServer = server
-        addLog("⏳ Kết nối tới \(server.name) (\(server.host):\(server.port))...")
-        addLog("👤 User: \(username)")
         do {
-            let mgr = vpnManager ?? NETunnelProviderManager()
-            let proto = NETunnelProviderProtocol()
-            proto.providerBundleIdentifier = "com.doni.doniapp.vpn"
-            proto.serverAddress = server.host
-            proto.providerConfiguration = [
-                "host":     server.host,
-                "port":     server.port,
-                "username": username,
-                "password": password,
-                "name":     server.name
-            ]
-            mgr.protocolConfiguration = proto
-            mgr.localizedDescription = "DoniMods — \(server.name)"
-            mgr.isEnabled = true
-            try await mgr.saveToPreferences()
-            try await mgr.loadFromPreferences()
-            vpnManager = mgr
-            try mgr.connection.startVPNTunnel()
+            let containerUUID = try resolveContainerUUID(bundleID: patch.targetBundleID)
+            let containerRoot = URL(fileURLWithPath: "/var/mobile/Containers/Data/Application")
+                .appendingPathComponent(containerUUID)
+
+            let patchBackupDir = backupRoot.appendingPathComponent(patch.fileName, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: patchBackupDir.path) else {
+                throw PatchError.noBackupFound
+            }
+
+            let fm = FileManager.default
+            guard let enumerator = fm.enumerator(
+                at: patchBackupDir,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]
+            ) else { throw PatchError.cannotEnumerate }
+
+            var restored = 0
+            while let bakURL = enumerator.nextObject() as? URL {
+                guard (try? bakURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
+                else { continue }
+
+                let relPath = bakURL.path
+                    .replacingOccurrences(of: patchBackupDir.path + "/", with: "")
+                let destURL = containerRoot.appendingPathComponent(relPath)
+
+                if fm.fileExists(atPath: destURL.path) {
+                    try fm.removeItem(at: destURL)
+                }
+                let parentDir = destURL.deletingLastPathComponent()
+                if !fm.fileExists(atPath: parentDir.path) {
+                    try fm.createDirectory(at: parentDir, withIntermediateDirectories: true)
+                }
+                try fm.copyItem(at: bakURL, to: destURL)
+                addLog("↩ \(relPath)")
+                restored += 1
+            }
+
+            try? fm.removeItem(at: patchBackupDir)
+            addLog("✅ Đã khôi phục \(restored) file.")
+            setStatus(patch, .idle)
+
         } catch {
-            addLog("❌ Lỗi: \(error.localizedDescription)")
-            statusMessage = error.localizedDescription
-            connectedServer = nil
+            addLog("❌ \(error.localizedDescription)")
+            setStatus(patch, .error(error.localizedDescription))
         }
     }
 
-    func disconnect() {
-        vpnManager?.connection.stopVPNTunnel()
-        addLog("🔌 Đã ngắt kết nối")
+    // ── ZIP Extraction ─────────────────────────────────────────────────────
+    private func extractZip(at src: URL, to dst: URL) throws {
+        // .3105 là file ZIP — dùng ZIPFoundation để giải nén
+        try FileManager.default.unzipItem(at: src, to: dst)
     }
 
+    // ── Resolve container UUID từ bundle ID ───────────────────────────────
+    private func resolveContainerUUID(bundleID: String) throws -> String {
+        let appsRoot = URL(fileURLWithPath: "/var/mobile/Containers/Data/Application")
+        let uuids = try FileManager.default.contentsOfDirectory(
+            at: appsRoot, includingPropertiesForKeys: nil
+        )
+        for uuidURL in uuids {
+            let metaURL = uuidURL
+                .appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
+            if let dict = NSDictionary(contentsOf: metaURL),
+               let id = dict["MCMMetadataIdentifier"] as? String,
+               id == bundleID {
+                return uuidURL.lastPathComponent
+            }
+        }
+        throw PatchError.containerNotFound(bundleID)
+    }
+
+    // ── Backup ────────────────────────────────────────────────────────────
+    private func backupFile(at url: URL, patchFileName: String, relativePath: String) throws {
+        let dest = backupRoot
+            .appendingPathComponent(patchFileName, isDirectory: true)
+            .appendingPathComponent(relativePath)
+        guard !FileManager.default.fileExists(atPath: dest.path) else { return } // đã backup rồi
+        let parentDir = dest.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: parentDir.path) {
+            try FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        }
+        try FileManager.default.copyItem(at: url, to: dest)
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+    private func setStatus(_ patch: PatchEntry, _ s: PatchStatus) { statuses[patch.fileName] = s }
+    func status(for patch: PatchEntry) -> PatchStatus { statuses[patch.fileName] ?? .idle }
+    func hasBackup(for patch: PatchEntry) -> Bool {
+        FileManager.default.fileExists(atPath:
+            backupRoot.appendingPathComponent(patch.fileName).path)
+    }
     func addLog(_ line: String) {
         let t = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
         log.append("[\(t)] \(line)")
-        if log.count > 80 { log.removeFirst() }
+        if log.count > 100 { log.removeFirst() }
     }
     func clearLog() { log.removeAll() }
+}
 
-    var isConnected: Bool  { status == .connected }
-    var isConnecting: Bool { status == .connecting || status == .reasserting }
-    var statusColor: Color {
-        switch status {
-        case .connected:                 return .green
-        case .connecting, .reasserting,
-             .disconnecting:             return .orange
-        default:                         return .gray
+// MARK: - Patch Errors
+
+enum PatchError: LocalizedError {
+    case bundleFileNotFound(String)
+    case containerNotFound(String)
+    case noBackupFound
+    case noFilesFound
+    case cannotEnumerate
+
+    var errorDescription: String? {
+        switch self {
+        case .bundleFileNotFound(let f): return "Không tìm thấy \(f) trong app bundle"
+        case .containerNotFound(let id): return "Không tìm thấy container của \(id) — app chưa cài?"
+        case .noBackupFound:             return "Không có backup để khôi phục"
+        case .noFilesFound:              return "Không tìm thấy file nào trong .3105"
+        case .cannotEnumerate:           return "Không duyệt được thư mục tạm"
         }
     }
 }
@@ -633,65 +817,50 @@ final class VPNManager: ObservableObject {
 
 struct MainView: View {
     @EnvironmentObject private var session: SessionManager
-    @ObservedObject private var vpn   = VPNManager.shared
-    @ObservedObject private var creds = ProxyCredentials.shared
-
-    @State private var selectedServer: ServerConfig? = nil
+    @ObservedObject private var engine = PatchEngine.shared
     @State private var showLogoutConfirm = false
-    @State private var showLog   = false
-    @State private var pulse     = false
-    @State private var showPass  = false
-    @FocusState private var focusField: CredField?
-
-    enum CredField { case username, password }
-
-    // Validation
-    private var canConnect: Bool {
-        selectedServer != nil &&
-        !creds.username.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !creds.password.isEmpty
-    }
+    @State private var showLog = false
 
     var body: some View {
         ZStack {
-            background
+            // Background
+            LinearGradient(
+                colors: [Color(red: 0.04, green: 0.04, blue: 0.09), .black],
+                startPoint: .top, endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            // Glow
+            Circle()
+                .fill(Color.cyan.opacity(0.07))
+                .frame(width: 300, height: 300)
+                .blur(radius: 80)
+                .offset(x: 60, y: -180)
+                .allowsHitTesting(false)
+
             VStack(spacing: 0) {
                 topBar
+
                 ScrollView(showsIndicators: false) {
-                    VStack(spacing: 16) {
-                        statusCircle
-                        serverList
-                        credentialsCard
-                        connectButton
+                    VStack(spacing: 22) {
+                        // Groups
+                        ForEach(patchGroups) { group in
+                            PatchGroupSection(group: group)
+                        }
+
+                        // Log
                         logSection
                     }
                     .padding(.horizontal, 20)
+                    .padding(.top, 4)
                     .padding(.bottom, 34)
                 }
             }
         }
-        .onAppear { pulse = true }
         .confirmationDialog("Đăng xuất?", isPresented: $showLogoutConfirm, titleVisibility: .visible) {
-            Button("Đăng xuất", role: .destructive) { vpn.disconnect(); session.logout() }
+            Button("Đăng xuất", role: .destructive) { session.logout() }
             Button("Huỷ", role: .cancel) {}
         }
-    }
-
-    // MARK: Background
-    private var background: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color(red: 0.03, green: 0.03, blue: 0.08), .black],
-                startPoint: .top, endPoint: .bottom
-            )
-            Circle()
-                .fill(vpn.statusColor.opacity(0.09))
-                .frame(width: 320, height: 320)
-                .blur(radius: 80)
-                .offset(x: 50, y: -160)
-                .animation(.easeInOut(duration: 0.8), value: vpn.statusColor)
-        }
-        .ignoresSafeArea()
     }
 
     // MARK: Top Bar
@@ -715,289 +884,7 @@ struct MainView: View {
                     .clipShape(Circle())
             }.buttonStyle(.plain)
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 16)
-        .padding(.bottom, 18)
-    }
-
-    // MARK: Status Circle
-    private var statusCircle: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .stroke(vpn.statusColor.opacity(0.12), lineWidth: 22)
-                    .frame(width: 150, height: 150)
-                    .scaleEffect(pulse && vpn.isConnected ? 1.12 : 1.0)
-                    .animation(
-                        vpn.isConnected
-                            ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true)
-                            : .easeInOut(duration: 0.3),
-                        value: pulse
-                    )
-                Circle()
-                    .stroke(vpn.statusColor.opacity(0.4), lineWidth: 1.5)
-                    .frame(width: 130, height: 130)
-                    .shadow(color: vpn.statusColor.opacity(0.5), radius: 10)
-                Circle()
-                    .fill(vpn.statusColor.opacity(0.08))
-                    .frame(width: 120, height: 120)
-
-                VStack(spacing: 7) {
-                    Image(systemName: vpn.isConnected
-                          ? "shield.lefthalf.filled"
-                          : vpn.isConnecting
-                            ? "arrow.trianglehead.2.clockwise.rotate.90"
-                            : "shield.slash")
-                        .font(.system(size: 36, weight: .medium))
-                        .foregroundStyle(vpn.statusColor)
-                        .shadow(color: vpn.statusColor, radius: 8)
-                        .rotationEffect(vpn.isConnecting ? .degrees(360) : .zero)
-                        .animation(
-                            vpn.isConnecting
-                                ? .linear(duration: 1.0).repeatForever(autoreverses: false)
-                                : .default,
-                            value: vpn.isConnecting
-                        )
-                    Text(vpn.isConnecting ? "CONNECTING" : vpn.isConnected ? "PROTECTED" : "EXPOSED")
-                        .font(.system(size: 9, weight: .black)).tracking(2)
-                        .foregroundStyle(vpn.statusColor)
-                }
-            }
-            .animation(.easeInOut(duration: 0.4), value: vpn.status)
-
-            Text(vpn.statusMessage)
-                .font(.system(size: 12)).foregroundStyle(.gray)
-                .multilineTextAlignment(.center)
-        }
-        .padding(.top, 4).padding(.bottom, 2)
-    }
-
-    // MARK: Server List
-    private var serverList: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("CHỌN SERVER")
-                    .font(.system(size: 11, weight: .black)).tracking(2)
-                    .foregroundStyle(.cyan.opacity(0.7))
-                Spacer()
-                if vpn.isConnected, let s = vpn.connectedServer {
-                    HStack(spacing: 4) {
-                        Circle().fill(Color.green).frame(width: 6, height: 6)
-                            .shadow(color: .green, radius: 3)
-                        Text(s.name)
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(.green)
-                    }
-                }
-            }
-
-            VStack(spacing: 0) {
-                ForEach(predefinedServers) { server in
-                    serverRow(server)
-                    if server.id != predefinedServers.last?.id {
-                        Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
-                    }
-                }
-            }
-            .background(Color.white.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.cyan.opacity(0.13), lineWidth: 1)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func serverRow(_ server: ServerConfig) -> some View {
-        let isSelected = selectedServer?.id == server.id
-        let isActive   = vpn.connectedServer?.id == server.id && vpn.isConnected
-
-        Button {
-            guard !vpn.isConnected else { return }
-            withAnimation(.easeInOut(duration: 0.2)) {
-                selectedServer = isSelected ? nil : server
-            }
-        } label: {
-            HStack(spacing: 14) {
-                ZStack {
-                    Circle()
-                        .fill(isActive   ? Color.green.opacity(0.18) :
-                              isSelected ? Color.cyan.opacity(0.15)  : Color.white.opacity(0.06))
-                        .frame(width: 40, height: 40)
-                    Text(server.flag).font(.system(size: 20))
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(server.name)
-                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
-                    Text("\(server.host):\(server.port)")
-                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.gray)
-                }
-
-                Spacer()
-
-                if isActive {
-                    Text("ACTIVE")
-                        .font(.system(size: 9, weight: .black)).tracking(1).foregroundStyle(.green)
-                } else if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 18)).foregroundStyle(.cyan)
-                } else {
-                    Image(systemName: "circle")
-                        .font(.system(size: 18)).foregroundStyle(.white.opacity(0.2))
-                }
-            }
-            .padding(.horizontal, 14).padding(.vertical, 13)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .opacity(vpn.isConnected && !isActive ? 0.4 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: isSelected)
-        .animation(.easeInOut(duration: 0.2), value: isActive)
-    }
-
-    // MARK: Credentials Card
-    private var credentialsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("XÁC THỰC PROXY")
-                    .font(.system(size: 11, weight: .black)).tracking(2)
-                    .foregroundStyle(.cyan.opacity(0.7))
-                Spacer()
-                Image(systemName: "lock.shield.fill")
-                    .font(.system(size: 12)).foregroundStyle(.cyan.opacity(0.5))
-            }
-
-            VStack(spacing: 0) {
-                // Username row
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.cyan.opacity(0.12)).frame(width: 34, height: 34)
-                        Image(systemName: "person.fill")
-                            .font(.system(size: 13)).foregroundStyle(.cyan)
-                    }
-                    TextField("", text: $creds.username,
-                              prompt: Text("Tên đăng nhập").foregroundColor(.gray))
-                        .font(.system(size: 14))
-                        .foregroundStyle(.white)
-                        .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .submitLabel(.next)
-                        .focused($focusField, equals: .username)
-                        .onSubmit { focusField = .password }
-                        .disabled(vpn.isConnected)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 13)
-
-                Divider().overlay(Color.white.opacity(0.07)).padding(.leading, 54)
-
-                // Password row
-                HStack(spacing: 12) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.purple.opacity(0.12)).frame(width: 34, height: 34)
-                        Image(systemName: "key.fill")
-                            .font(.system(size: 13)).foregroundStyle(.purple)
-                    }
-                    Group {
-                        if showPass {
-                            TextField("", text: $creds.password,
-                                      prompt: Text("Mật khẩu").foregroundColor(.gray))
-                        } else {
-                            SecureField("", text: $creds.password,
-                                        prompt: Text("Mật khẩu").foregroundColor(.gray))
-                        }
-                    }
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white)
-                    .textContentType(.password)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .focused($focusField, equals: .password)
-                    .onSubmit { focusField = nil }
-                    .disabled(vpn.isConnected)
-
-                    Button {
-                        showPass.toggle()
-                    } label: {
-                        Image(systemName: showPass ? "eye.slash.fill" : "eye.fill")
-                            .font(.system(size: 13)).foregroundStyle(.gray)
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(vpn.isConnected)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 13)
-            }
-            .background(Color.white.opacity(0.05))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.cyan.opacity(0.13), lineWidth: 1)
-            }
-
-            HStack(spacing: 5) {
-                Image(systemName: "internaldrive.fill")
-                    .font(.system(size: 10)).foregroundStyle(.gray.opacity(0.6))
-                Text("Tên đăng nhập & mật khẩu được lưu tự động trên thiết bị.")
-                    .font(.system(size: 11)).foregroundStyle(.gray.opacity(0.6))
-            }
-        }
-    }
-
-    // MARK: Connect Button
-    private var connectButton: some View {
-        Button {
-            focusField = nil
-            Task {
-                if vpn.isConnected || vpn.isConnecting {
-                    vpn.disconnect()
-                } else if let server = selectedServer {
-                    await vpn.connect(
-                        to: server,
-                        username: creds.username.trimmingCharacters(in: .whitespaces),
-                        password: creds.password
-                    )
-                }
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: vpn.isConnected ? "poweroff" : "power")
-                    .font(.system(size: 15, weight: .bold))
-                Text(
-                    vpn.isConnecting     ? "Đang kết nối..." :
-                    vpn.isConnected      ? "Ngắt kết nối"    :
-                    selectedServer == nil ? "Chọn server trước" :
-                    !canConnect          ? "Nhập thông tin xác thực" : "Kết nối"
-                )
-                .font(.system(size: 15, weight: .bold))
-            }
-            .foregroundStyle(.black)
-            .frame(maxWidth: .infinity).frame(height: 52)
-            .background(
-                vpn.isConnected
-                    ? LinearGradient(colors: [.red.opacity(0.9), .red],
-                                     startPoint: .leading, endPoint: .trailing)
-                    : canConnect
-                        ? LinearGradient(colors: [.cyan, .blue],
-                                         startPoint: .leading, endPoint: .trailing)
-                        : LinearGradient(colors: [.gray.opacity(0.35), .gray.opacity(0.25)],
-                                         startPoint: .leading, endPoint: .trailing)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .shadow(
-                color: vpn.isConnected ? Color.red.opacity(0.3) :
-                       canConnect       ? Color.cyan.opacity(0.3) : .clear,
-                radius: 10, y: 4
-            )
-        }
-        .buttonStyle(.plain)
-        .disabled(vpn.isConnecting || (!vpn.isConnected && !canConnect))
-        .animation(.easeInOut(duration: 0.25), value: vpn.isConnected)
-        .animation(.easeInOut(duration: 0.15), value: canConnect)
+        .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 18)
     }
 
     // MARK: Log Section
@@ -1008,8 +895,16 @@ struct MainView: View {
             } label: {
                 HStack {
                     Image(systemName: "terminal").font(.system(size: 12))
-                    Text("Connection Log").font(.system(size: 13, weight: .semibold))
+                    Text("Log").font(.system(size: 13, weight: .semibold))
                     Spacer()
+                    if !engine.log.isEmpty {
+                        Text("\(engine.log.count)")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Color.cyan)
+                            .clipShape(Capsule())
+                    }
                     Image(systemName: showLog ? "chevron.up" : "chevron.down")
                         .font(.system(size: 11))
                 }
@@ -1024,34 +919,276 @@ struct MainView: View {
             }.buttonStyle(.plain)
 
             if showLog {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 5) {
                     HStack {
                         Text("LOG").font(.system(size: 10, weight: .black)).tracking(2).foregroundStyle(.gray)
                         Spacer()
-                        Button("Clear") { vpn.clearLog() }
+                        Button("Xoá") { engine.clearLog() }
                             .font(.system(size: 11)).foregroundStyle(.gray).buttonStyle(.plain)
                     }
-                    if vpn.log.isEmpty {
+                    if engine.log.isEmpty {
                         Text("Chưa có log.")
                             .font(.system(size: 12)).foregroundStyle(.gray.opacity(0.5))
                             .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 8)
                     } else {
-                        ForEach(vpn.log.reversed(), id: \.self) { line in
+                        ForEach(engine.log.reversed(), id: \.self) { line in
                             Text(line)
                                 .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.65))
+                                .foregroundStyle(.white.opacity(0.7))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                 }
                 .padding(13)
-                .background(Color.black.opacity(0.45))
+                .background(Color.black.opacity(0.5))
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay {
                     RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.07), lineWidth: 1)
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
+        }
+    }
+}
+
+// MARK: - Patch Group Section
+
+struct PatchGroupSection: View {
+    let group: PatchGroup
+    @State private var collapsed = false
+
+    var appliedCount: Int {
+        group.patches.filter { PatchEngine.shared.hasBackup(for: $0) }.count
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            // Group header — tap để thu gọn
+            Button {
+                withAnimation(.easeInOut(duration: 0.25)) { collapsed.toggle() }
+            } label: {
+                HStack(spacing: 12) {
+                    // Group icon
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(group.color.opacity(0.18))
+                            .frame(width: 38, height: 38)
+                        Image(systemName: group.icon)
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(group.color)
+                            .shadow(color: group.color.opacity(0.5), radius: 4)
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(group.title)
+                            .font(.system(size: 16, weight: .black))
+                            .foregroundStyle(.white)
+                        Text(group.subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.gray)
+                    }
+
+                    Spacer()
+
+                    // Badge số patch đã áp dụng
+                    if appliedCount > 0 {
+                        Text("\(appliedCount)/\(group.patches.count)")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(group.color)
+                            .clipShape(Capsule())
+                    } else {
+                        Text("\(group.patches.count) patch")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.gray)
+                    }
+
+                    Image(systemName: collapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.gray)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(group.color.opacity(0.2), lineWidth: 1)
+                }
+            }
+            .buttonStyle(.plain)
+
+            // Patch cards (collapsible)
+            if !collapsed {
+                VStack(spacing: 10) {
+                    ForEach(group.patches) { patch in
+                        PatchCard(patch: patch)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+}
+
+// MARK: - Patch Card
+
+struct PatchCard: View {
+    let patch: PatchEntry
+    @ObservedObject private var engine = PatchEngine.shared
+    @State private var showConfirmApply   = false
+    @State private var showConfirmRestore = false
+
+    private var status: PatchStatus { engine.status(for: patch) }
+    private var hasBackup: Bool     { engine.hasBackup(for: patch) }
+
+    private var isApplied: Bool {
+        if case .applied = status { return true }
+        // Coi như applied nếu đã có backup (persist qua relaunch)
+        return hasBackup
+    }
+    private var isBusy: Bool {
+        status == .applying || status == .restoring
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Top row: icon + info
+            HStack(spacing: 14) {
+                // Icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(patch.color.opacity(0.15))
+                        .frame(width: 50, height: 50)
+                    Image(systemName: patch.icon)
+                        .font(.system(size: 22))
+                        .foregroundStyle(patch.color)
+                        .shadow(color: patch.color.opacity(0.5), radius: 6)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(patch.name)
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                        if isApplied {
+                            Text("ĐÃ ÁP DỤNG")
+                                .font(.system(size: 9, weight: .black)).tracking(1)
+                                .foregroundStyle(.black)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.green)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    Text(patch.description)
+                        .font(.system(size: 12)).foregroundStyle(.gray)
+                    Text(patch.fileName)
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.gray.opacity(0.5))
+                }
+
+                Spacer()
+
+                // Busy spinner
+                if isBusy {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(.cyan)
+                        .scaleEffect(0.85)
+                }
+            }
+            .padding(16)
+
+            // Error banner
+            if case .error(let msg) = status {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12)).foregroundStyle(.red)
+                    Text(msg)
+                        .font(.system(size: 11)).foregroundStyle(.red.opacity(0.9))
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.bottom, 10)
+            }
+
+            Divider().overlay(Color.white.opacity(0.07))
+
+            // Action buttons
+            HStack(spacing: 0) {
+                // Apply button
+                Button {
+                    showConfirmApply = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.down.circle.fill")
+                            .font(.system(size: 14))
+                        Text(isApplied ? "Áp dụng lại" : "Áp dụng")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(isBusy ? .gray : .cyan)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(isBusy)
+
+                // Divider
+                Rectangle()
+                    .fill(Color.white.opacity(0.07))
+                    .frame(width: 1, height: 28)
+
+                // Restore button
+                Button {
+                    showConfirmRestore = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                            .font(.system(size: 14))
+                        Text("Khôi phục")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .foregroundStyle(isBusy || !isApplied ? .gray.opacity(0.4) : .orange)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                }
+                .buttonStyle(.plain)
+                .disabled(isBusy || !isApplied)
+            }
+        }
+        .background(Color.white.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(
+                    isApplied ? Color.green.opacity(0.35) : Color.white.opacity(0.08),
+                    lineWidth: 1
+                )
+        }
+        .shadow(color: isApplied ? Color.green.opacity(0.1) : .clear, radius: 10)
+        .animation(.easeInOut(duration: 0.25), value: isApplied)
+        .confirmationDialog(
+            "Áp dụng \"\(patch.name)\"?",
+            isPresented: $showConfirmApply,
+            titleVisibility: .visible
+        ) {
+            Button("Áp dụng", role: .none) {
+                Task { await PatchEngine.shared.apply(patch) }
+            }
+            Button("Huỷ", role: .cancel) {}
+        } message: {
+            Text("File gốc sẽ được backup tự động trước khi ghi đè.")
+        }
+        .confirmationDialog(
+            "Khôi phục \"\(patch.name)\"?",
+            isPresented: $showConfirmRestore,
+            titleVisibility: .visible
+        ) {
+            Button("Khôi phục file gốc", role: .destructive) {
+                Task { await PatchEngine.shared.restore(patch) }
+            }
+            Button("Huỷ", role: .cancel) {}
+        } message: {
+            Text("File đã patch sẽ bị thay bằng bản backup gốc.")
         }
     }
 }
