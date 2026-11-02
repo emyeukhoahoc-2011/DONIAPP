@@ -124,7 +124,7 @@ final class Enemy: Identifiable, ObservableObject {
 // MARK: - Spawn map
 
 enum EnemySpawn {
-    static func makeWorld(playerLevel lv: Int) -> [Enemy] {
+    @MainActor static func makeWorld(playerLevel lv: Int) -> [Enemy] {
         [
             Enemy(type: .slime,      position: CGPoint(x: 280,  y: 450),  level: lv),
             Enemy(type: .slime,      position: CGPoint(x: 500,  y: 320),  level: lv),
