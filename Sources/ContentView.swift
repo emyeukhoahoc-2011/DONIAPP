@@ -171,7 +171,7 @@ private struct BottomBar: View {
         HStack(alignment: .bottom, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(game.combat.combatLog)
-                    .font(.system(.subheadline, design: .rounded).semibold())
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
                     .foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.8)
                 Text("Joystick di chuyển • Chọn phép • Nhấn ⚔️ tấn công")
                     .font(.system(size: 9, weight: .medium))
